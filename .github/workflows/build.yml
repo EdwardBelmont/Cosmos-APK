@@ -6,20 +6,459 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  build-apk:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Set up JDK 17
+      - name: Descargar Codigo Base
+        uses: actions/checkout@v4
+
+      - name: Configurar Java JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
-      - name: Build with Gradle
+
+      - name: Instalar Android SDK Automatico
         run: |
-          chmod +x gradlew || true
-          ./gradlew assembleDebug || gradle assembleDebug
-      - name: Upload APK
+          export ANDROID_SDK_ROOT=$HOME/android-sdk
+          mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O tools.zip
+          unzip -q tools.zip -d $ANDROID_SDK_ROOT/cmdline-tools
+          mv $ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools $ANDROID_SDK_ROOT/cmdline-tools/latest
+          rm tools.zip
+          
+          export PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools
+          yes | sdkmanager --licenses || true
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
+
+      - name: Crear Estructura Gradle y Archivos de COSMOS
+        run: |
+          mkdir -p app/src/main/java/com/belmont/cosmos
+          mkdir -p app/src/main/assets
+
+          # 1. ARCHIVO SETTINGS.GRADLE
+          cat << 'EOF' > settings.gradle
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "COSMOS"
+          include ':app'
+          EOF
+
+          # 2. ARCHIVO BUILD.GRADLE GLOBAL
+          cat << 'EOF' > build.gradle
+          plugins {
+              id 'com.android.application' version '8.2.2' apply false
+              id 'org.jetbrains.kotlin.android' version '1.9.22' apply false
+          }
+          EOF
+
+          # 3. GRADLE PROPERTIES
+          cat << 'EOF' > gradle.properties
+          org.gradle.jvmargs=-Xmx2048m
+          android.useAndroidX=true
+          EOF
+
+          # 4. ARCHIVO APP/BUILD.GRADLE
+          cat << 'EOF' > app/build.gradle
+          plugins {
+              id 'com.android.application'
+              id 'org.jetbrains.kotlin.android'
+          }
+          android {
+              namespace 'com.belmont.cosmos'
+              compileSdk 34
+              defaultConfig {
+                  applicationId "com.belmont.cosmos"
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = '17' }
+          }
+          dependencies {
+              implementation 'androidx.core:core-ktx:1.12.0'
+              implementation 'androidx.activity:activity-ktx:1.8.2'
+              implementation 'androidx.media:media:1.7.0'
+          }
+          EOF
+
+          # 5. ANDROIDMANIFEST.XML CON PERMISOS DE MEDIASTORE Y NOTIFICACIONES
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+              <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <application
+                  android:label="COSMOS"
+                  android:icon="@android:drawable/ic_media_play"
+                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
+                  android:usesCleartextTraffic="true">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:configChanges="orientation|screenSize|keyboardHidden">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          # 6. KOTLIN MAINACTIVITY (MOTOR NATIVO MEDIASTORE + NOTIFICACIONES)
+          cat << 'EOF' > app/src/main/java/com/belmont/cosmos/MainActivity.kt
+          package com.belmont.cosmos
+
+          import android.Manifest
+          import android.app.NotificationChannel
+          import android.app.NotificationManager
+          import android.app.PendingIntent
+          import android.content.BroadcastReceiver
+          import android.content.ContentUris
+          import android.content.Context
+          import android.content.Intent
+          import android.content.IntentFilter
+          import android.content.pm.PackageManager
+          import android.media.session.MediaSession
+          import android.media.session.PlaybackState
+          import android.net.Uri
+          import android.os.Build
+          import android.os.Bundle
+          import android.provider.MediaStore
+          import android.webkit.JavascriptInterface
+          import android.webkit.WebChromeClient
+          import android.webkit.WebResourceRequest
+          import android.webkit.WebResourceResponse
+          import android.webkit.WebView
+          import android.webkit.WebViewClient
+          import androidx.activity.ComponentActivity
+          import androidx.core.app.ActivityCompat
+          import androidx.core.app.NotificationCompat
+          import androidx.core.content.ContextCompat
+          import org.json.JSONArray
+          import org.json.JSONObject
+
+          class MainActivity : ComponentActivity() {
+              private lateinit var webView: WebView
+              private var mediaSession: MediaSession? = null
+              private val CHANNEL_ID = "cosmos_playback_channel"
+
+              private val mediaActionReceiver = object : BroadcastReceiver() {
+                  override fun onReceive(context: Context?, intent: Intent?) {
+                      when (intent?.action) {
+                          "COSMOS_PREV" -> webView.evaluateJavascript("prevTrack();", null)
+                          "COSMOS_TOGGLE" -> webView.evaluateJavascript("togglePlay();", null)
+                          "COSMOS_NEXT" -> webView.evaluateJavascript("nextTrack();", null)
+                      }
+                  }
+              }
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  window.statusBarColor = android.graphics.Color.parseColor("#040109")
+                  window.navigationBarColor = android.graphics.Color.parseColor("#040109")
+                  setupMediaSessionAndChannel()
+
+                  webView = WebView(this)
+                  setContentView(webView)
+                  webView.settings.apply {
+                      javaScriptEnabled = true
+                      domStorageEnabled = true
+                      mediaPlaybackRequiresUserGesture = false
+                      allowFileAccess = true
+                      allowContentAccess = true
+                  }
+                  webView.webChromeClient = WebChromeClient()
+                  webView.webViewClient = object : WebViewClient() {
+                      override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+                          val url = request?.url?.toString() ?: return null
+                          if (url.startsWith("https://cosmos.local/audio/")) {
+                              val id = url.removePrefix("https://cosmos.local/audio/").toLongOrNull() ?: return null
+                              val contentUri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
+                              return try {
+                                  val stream = contentResolver.openInputStream(contentUri)
+                                  WebResourceResponse("audio/mpeg", "UTF-8", 200, "OK", mapOf("Access-Control-Allow-Origin" to "*"), stream)
+                              } catch (e: Exception) { null }
+                          }
+                          if (url.startsWith("https://cosmos.local/albumart/")) {
+                              val albumId = url.removePrefix("https://cosmos.local/albumart/").toLongOrNull() ?: return null
+                              val artUri = ContentUris.withAppendedId(Uri.parse("content://media/external/audio/albumart"), albumId)
+                              return try {
+                                  val stream = contentResolver.openInputStream(artUri)
+                                  WebResourceResponse("image/jpeg", "UTF-8", 200, "OK", mapOf("Access-Control-Allow-Origin" to "*"), stream)
+                              } catch (e: Exception) { null }
+                          }
+                          return super.shouldInterceptRequest(view, request)
+                      }
+                  }
+                  webView.addJavascriptInterface(CosmosBridge(), "CosmosNative")
+                  webView.loadUrl("file:///android_asset/index.html")
+              }
+
+              private fun setupMediaSessionAndChannel() {
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                      val channel = NotificationChannel(CHANNEL_ID, "COSMOS Reproductor", NotificationManager.IMPORTANCE_LOW)
+                      getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+                  }
+                  mediaSession = MediaSession(this, "CosmosBelmontSession").apply {
+                      setCallback(object : MediaSession.Callback() {
+                          override fun onPlay() { runOnUiThread { webView.evaluateJavascript("playAudio();", null) } }
+                          override fun onPause() { runOnUiThread { webView.evaluateJavascript("pauseAudio();", null) } }
+                          override fun onSkipToNext() { runOnUiThread { webView.evaluateJavascript("nextTrack();", null) } }
+                          override fun onSkipToPrevious() { runOnUiThread { webView.evaluateJavascript("prevTrack();", null) } }
+                      })
+                      isActive = true
+                  }
+                  val filter = IntentFilter().apply {
+                      addAction("COSMOS_PREV"); addAction("COSMOS_TOGGLE"); addAction("COSMOS_NEXT")
+                  }
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                      registerReceiver(mediaActionReceiver, filter, Context.RECEIVER_EXPORTED)
+                  } else {
+                      registerReceiver(mediaActionReceiver, filter)
+                  }
+              }
+
+              private fun checkPermissionsAndScan() {
+                  val perms = mutableListOf<String>()
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                      perms.add(Manifest.permission.READ_MEDIA_AUDIO)
+                      perms.add(Manifest.permission.POST_NOTIFICATIONS)
+                  } else {
+                      perms.add(Manifest.permission.READ_EXTERNAL_STORAGE)
+                  }
+                  val missing = perms.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
+                  if (missing.isNotEmpty()) {
+                      ActivityCompat.requestPermissions(this, missing.toTypedArray(), 101)
+                  } else {
+                      scanDeviceMusic()
+                  }
+              }
+
+              override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+                  super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+                  scanDeviceMusic()
+              }
+
+              private fun scanDeviceMusic() {
+                  Thread {
+                      val arr = JSONArray()
+                      val projection = arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.TITLE, MediaStore.Audio.Media.ARTIST, MediaStore.Audio.Media.ALBUM, MediaStore.Audio.Media.ALBUM_ID)
+                      contentResolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, projection, "${MediaStore.Audio.Media.IS_MUSIC} != 0", null, "${MediaStore.Audio.Media.DATE_ADDED} DESC")?.use { cursor ->
+                          val idCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
+                          val titleCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
+                          val artistCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
+                          val albumCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
+                          val albumIdCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID)
+                          while (cursor.moveToNext()) {
+                              val id = cursor.getLong(idCol)
+                              val albumId = cursor.getLong(albumIdCol)
+                              arr.put(JSONObject().apply {
+                                  put("id", "ms_$id")
+                                  put("title", cursor.getString(titleCol) ?: "Pista")
+                                  put("artist", cursor.getString(artistCol) ?: "Edward Belmont")
+                                  put("album", cursor.getString(albumCol) ?: "Cosmos")
+                                  put("audioUrl", "https://cosmos.local/audio/$id")
+                                  put("cover", "https://cosmos.local/albumart/$albumId")
+                              })
+                          }
+                      }
+                      val jsonStr = arr.toString()
+                      runOnUiThread { webView.evaluateJavascript("window.onNativeLibraryLoaded(${JSONObject.quote(jsonStr)});", null) }
+                  }.start()
+              }
+
+              inner class CosmosBridge {
+                  @JavascriptInterface fun rescanMediaStore() { runOnUiThread { checkPermissionsAndScan() } }
+                  @JavascriptInterface fun updateNotification(title: String, artist: String, album: String, isPlaying: Boolean) {
+                      runOnUiThread { showMediaNotification(title, artist, album, isPlaying) }
+                  }
+              }
+
+              private fun showMediaNotification(title: String, artist: String, album: String, isPlaying: Boolean) {
+                  val state = if (isPlaying) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED
+                  mediaSession?.setPlaybackState(PlaybackState.Builder().setActions(PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or PlaybackState.ACTION_SKIP_TO_NEXT or PlaybackState.ACTION_SKIP_TO_PREVIOUS).setState(state, PlaybackState.PLAYBACK_POSITION_UNKNOWN, 1.0f).build())
+
+                  val prevPending = PendingIntent.getBroadcast(this, 1, Intent("COSMOS_PREV"), PendingIntent.FLAG_IMMUTABLE)
+                  val togglePending = PendingIntent.getBroadcast(this, 2, Intent("COSMOS_TOGGLE"), PendingIntent.FLAG_IMMUTABLE)
+                  val nextPending = PendingIntent.getBroadcast(this, 3, Intent("COSMOS_NEXT"), PendingIntent.FLAG_IMMUTABLE)
+                  val playPauseIcon = if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
+
+                  val builder = NotificationCompat.Builder(this, CHANNEL_ID)
+                      .setSmallIcon(android.R.drawable.ic_media_play)
+                      .setContentTitle(title)
+                      .setContentText("$artist • $album")
+                      .setOngoing(isPlaying)
+                      .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                      .addAction(android.R.drawable.ic_media_previous, "Anterior", prevPending)
+                      .addAction(playPauseIcon, if (isPlaying) "Pausa" else "Play", togglePending)
+                      .addAction(android.R.drawable.ic_media_next, "Siguiente", nextPending)
+                      .setStyle(androidx.media.app.NotificationCompat.MediaStyle().setShowActionsInCompactView(0, 1, 2))
+
+                  getSystemService(NotificationManager::class.java).notify(777, builder.build())
+              }
+
+              override fun onDestroy() {
+                  super.onDestroy()
+                  unregisterReceiver(mediaActionReceiver)
+                  mediaSession?.release()
+              }
+          }
+          EOF
+
+          # 7. INTERFAZ HTML DE COSMOS
+          cat << 'EOF' > app/src/main/assets/index.html
+          <!DOCTYPE html>
+          <html lang="es">
+          <head>
+            <meta charset="UTF-8" />
+            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+            <title>COSMOS</title>
+            <script src="https://cdn.tailwindcss.com"></script>
+            <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
+            <style>
+              @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Montserrat:wght@200;300;400;600&family=Inter:wght@300;400;500;600;700&display=swap');
+              body { background-color: #040109; color: #f3e8ff; font-family: 'Inter', sans-serif; overflow-x: hidden; user-select: none; -webkit-tap-highlight-color: transparent; }
+              .digital-cosmos { font-family: 'Share Tech Mono', monospace; letter-spacing: 0.28em; text-shadow: 0 0 12px rgba(217, 70, 239, 0.8); }
+              .belmont-thin { font-family: 'Montserrat', sans-serif; font-weight: 200; letter-spacing: 0.34em; }
+              .cosmos-bg { background: radial-gradient(circle at 50% -10%, rgba(168, 85, 247, 0.30) 0%, transparent 55%), linear-gradient(180deg, #080312 0%, #040109 100%); }
+              .glass-card { background: rgba(15, 7, 28, 0.86); backdrop-filter: blur(18px); border: 1px solid rgba(192, 132, 252, 0.2); }
+              .neon-chord-box { background: linear-gradient(160deg, rgba(107, 33, 168, 0.6) 0%, rgba(12, 5, 23, 0.96) 100%); border: 1.5px solid #e879f9; box-shadow: 0 0 25px rgba(217, 70, 239, 0.4); }
+              input[type="range"] { -webkit-appearance: none; appearance: none; background: #23113b; height: 4px; border-radius: 999px; outline: none; }
+              input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #f5d0fe; box-shadow: 0 0 12px #d946ef; cursor: pointer; }
+              .no-scrollbar::-webkit-scrollbar { display: none; }
+            </style>
+          </head>
+          <body class="cosmos-bg min-h-screen flex flex-col justify-between pb-40">
+            <header class="sticky top-0 z-30 glass-card px-4 py-3 flex items-center justify-between border-b border-purple-800/30">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-purple-950/90 border border-purple-500/40 flex items-center justify-center">
+                  <i class="fa-solid fa-meteor text-fuchsia-400 text-lg"></i>
+                </div>
+                <div>
+                  <h1 class="digital-cosmos text-lg font-bold text-purple-100 leading-none">COSMOS</h1>
+                  <p class="belmont-thin text-[7px] text-purple-200/75 uppercase mt-1">Belmont Edition</p>
+                </div>
+              </div>
+              <button onclick="rescanPhoneLibrary()" class="px-3 py-1.5 rounded-lg bg-gradient-to-r from-purple-700 to-fuchsia-600 text-white text-xs font-semibold">
+                <i class="fa-solid fa-rotate mr-1"></i> Escanear
+              </button>
+            </header>
+
+            <main id="libraryContainer" class="px-4 pt-4 flex-1 space-y-2 overflow-y-auto"></main>
+
+            <!-- MINI REPRODUCTOR -->
+            <div class="fixed bottom-0 left-0 right-0 z-40 p-2 bg-gradient-to-t from-[#040109] via-[#040109]/95 to-transparent">
+              <div class="glass-card rounded-2xl p-3 shadow-2xl border border-purple-500/25">
+                <div class="flex items-center justify-between gap-3">
+                  <div class="flex items-center gap-3 flex-1 min-w-0">
+                    <img id="miniCover" src="" class="w-12 h-12 rounded-xl object-cover border border-purple-400/30 bg-purple-950/60 shrink-0" />
+                    <div class="min-w-0 flex-1">
+                      <h3 id="miniTitle" class="font-semibold text-sm text-white truncate">Escaneando dispositivo...</h3>
+                      <p id="miniArtist" class="text-xs text-purple-300/70 truncate">COSMOS Native Engine</p>
+                    </div>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <button onclick="prevTrack()" class="w-8 h-8 rounded-full text-purple-200"><i class="fa-solid fa-backward-step"></i></button>
+                    <button onclick="togglePlay()" id="miniPlayBtn" class="w-10 h-10 rounded-full bg-purple-600 text-white flex items-center justify-center"><i class="fa-solid fa-play text-sm"></i></button>
+                    <button onclick="nextTrack()" class="w-8 h-8 rounded-full text-purple-200"><i class="fa-solid fa-forward-step"></i></button>
+                  </div>
+                </div>
+                <div class="mt-2 flex items-center gap-2">
+                  <input type="range" id="miniSeek" value="0" min="0" max="100" step="0.1" oninput="seekAudio(this.value)" class="flex-1" />
+                </div>
+              </div>
+            </div>
+
+            <audio id="audioElement" crossorigin="anonymous"></audio>
+
+            <script>
+              let tracks = [];
+              let currentTrackIndex = -1;
+              let isPlaying = false;
+              const audioEl = document.getElementById("audioElement");
+
+              window.onNativeLibraryLoaded = function(jsonArray) {
+                try {
+                  tracks = typeof jsonArray === "string" ? JSON.parse(jsonArray) : jsonArray;
+                  renderLibrary();
+                  if (tracks.length > 0 && currentTrackIndex === -1) loadTrack(0, false);
+                } catch(e) {}
+              };
+
+              function rescanPhoneLibrary() { if(window.CosmosNative) window.CosmosNative.rescanMediaStore(); }
+              function notifyNativeAndroidService() {
+                if(window.CosmosNative && currentTrackIndex >= 0 && tracks[currentTrackIndex]) {
+                  const t = tracks[currentTrackIndex];
+                  window.CosmosNative.updateNotification(t.title, t.artist, t.album, isPlaying);
+                }
+              }
+
+              function loadTrack(idx, autoPlay=false) {
+                if(idx < 0 || idx >= tracks.length) return;
+                currentTrackIndex = idx;
+                const t = tracks[idx];
+                document.getElementById("miniCover").src = t.cover;
+                document.getElementById("miniTitle").textContent = t.title;
+                document.getElementById("miniArtist").textContent = t.artist;
+                audioEl.src = t.audioUrl;
+                audioEl.load();
+                renderLibrary();
+                notifyNativeAndroidService();
+                if(autoPlay) playAudio();
+              }
+
+              function togglePlay() { if(!tracks.length) { rescanPhoneLibrary(); return; } isPlaying ? pauseAudio() : playAudio(); }
+              function playAudio() { isPlaying = true; updateBtn(true); audioEl.play().catch(()=>{}); notifyNativeAndroidService(); }
+              function pauseAudio() { isPlaying = false; updateBtn(false); audioEl.pause(); notifyNativeAndroidService(); }
+              function updateBtn(p) { document.getElementById("miniPlayBtn").innerHTML = p ? '<i class="fa-solid fa-pause"></i>' : '<i class="fa-solid fa-play"></i>'; }
+              function prevTrack() { if(tracks.length) loadTrack((currentTrackIndex - 1 + tracks.length) % tracks.length, true); }
+              function nextTrack() { if(tracks.length) loadTrack((currentTrackIndex + 1) % tracks.length, true); }
+              
+              audioEl.addEventListener("timeupdate", () => {
+                if(audioEl.duration) document.getElementById("miniSeek").value = (audioEl.currentTime / audioEl.duration) * 100;
+              });
+              audioEl.addEventListener("ended", nextTrack);
+              function seekAudio(val) { if(audioEl.duration) audioEl.currentTime = (val/100)*audioEl.duration; }
+
+              function renderLibrary() {
+                const container = document.getElementById("libraryContainer");
+                container.innerHTML = "";
+                tracks.forEach((track, idx) => {
+                  const isCur = idx === currentTrackIndex;
+                  const div = document.createElement("div");
+                  div.className = `p-2.5 rounded-xl flex items-center justify-between gap-3 cursor-pointer ${isCur ? "bg-purple-900/50 border border-fuchsia-400" : "glass-card"}`;
+                  div.innerHTML = `<div class="flex items-center gap-3 min-w-0 flex-1" onclick="loadTrack(${idx}, true)"><img src="${track.cover}" class="w-11 h-11 rounded-lg object-cover shrink-0" /><div class="min-w-0 flex-1"><h4 class="text-sm font-semibold ${isCur?"text-fuchsia-300":"text-white"} truncate">${track.title}</h4><p class="text-xs text-purple-300/65 truncate">${track.artist}</p></div></div>`;
+                  container.appendChild(div);
+                });
+              }
+            </script>
+          </body>
+          </html>
+          EOF
+
+          gradle wrapper --gradle-version 8.5
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Subir APK Generado
         uses: actions/upload-artifact@v4
         with:
           name: COSMOS-Belmont-Edition-APK
