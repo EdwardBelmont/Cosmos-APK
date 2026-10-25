@@ -35,10 +35,42 @@ jobs:
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
           echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
 
-      - name: Crear Estructura Gradle y Archivos de COSMOS Master Edition
+      - name: Organizar Imagenes Reales y Compilar COSMOS Master Edition
         run: |
           mkdir -p app/src/main/java/com/belmont/cosmos
           mkdir -p app/src/main/assets
+          mkdir -p app/src/main/res/values
+          mkdir -p app/src/main/res/drawable
+          mkdir -p app/src/main/res/mipmap-xxhdpi
+
+          # Mover las imágenes reales a la ruta de recursos de Android si existen en la raíz
+          if [ -f "ic_launcher.png" ]; then
+            cp ic_launcher.png app/src/main/res/drawable/ic_launcher.png
+            cp ic_launcher.png app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+            cp ic_launcher.png app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png
+          fi
+
+          if [ -f "splash_bg.png" ]; then
+            cp splash_bg.png app/src/main/res/drawable/splash_bg.png
+          fi
+
+          cat << 'EOF' > app/src/main/res/values/styles.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="Theme.CosmosSplash" parent="android:Theme.DeviceDefault.NoActionBar">
+                  <item name="android:windowBackground">@drawable/splash_bg</item>
+                  <item name="android:statusBarColor">#040109</item>
+                  <item name="android:navigationBarColor">#040109</item>
+              </style>
+          </resources>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/values/colors.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <color name="cosmos_void">#040109</color>
+          </resources>
+          EOF
 
           cat << 'EOF' > settings.gradle
           pluginManagement {
@@ -102,8 +134,9 @@ jobs:
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
               <application
                   android:label="COSMOS"
-                  android:icon="@android:drawable/ic_media_play"
-                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
+                  android:icon="@mipmap/ic_launcher"
+                  android:roundIcon="@mipmap/ic_launcher_round"
+                  android:theme="@style/Theme.CosmosSplash"
                   android:usesCleartextTraffic="true">
                   <activity
                       android:name=".MainActivity"
@@ -493,7 +526,7 @@ jobs:
             <script>
               const fallbackCoverSvg = "data:image/svg+xml;utf8," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300"><rect width="300" height="300" fill="#06020d"/><circle cx="150" cy="150" r="105" fill="none" stroke="#9333ea" stroke-width="2" opacity="0.4"/><path d="M85 138 A68 68 0 0 1 215 138" fill="none" stroke="#f0abfc" stroke-width="5" stroke-linecap="round"/><polygon points="150,65 92,165 122,165 150,110" fill="#ffffff"/><polygon points="150,65 208,165 178,165 150,110" fill="#c084fc"/><polygon points="128,160 150,225 172,160 150,180" fill="#e879f9"/><polygon points="150,126 160,146 150,166 140,146" fill="#ffffff"/></svg>`);
 
-              let tracks = [], customOverrides = JSON.parse(localStorage.getItem("cosmos_overrides_v7")) || {}, playlists = [];
+              let tracks = [], customOverrides = JSON.parse(localStorage.getItem("cosmos_overrides_v10")) || {}, playlists = [];
               let currentTab = "songs", currentTrackIndex = -1, isPlaying = false, shuffleMode = false, repeatMode = 0;
 
               window.onNativeLibraryLoaded = function(jsonArray) {
@@ -524,8 +557,10 @@ jobs:
                 }
               }
 
-              // DSP RECONOCEDOR DE ACORDES MAESTRO BLINDADO
-              let audioCtx = null, analyser = null, mediaSource = null;
+              // =========================================================================
+              // MOTOR DSP DE ACORDES MAESTRO BLINDADO (CONEXIÓN SEGURA AL AUDIO)
+              // =========================================================================
+              let audioCtx = null, analyser = null, mediaSource = null, isSourceConnected = false;
               let chordDetectionMode = "power";
               const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
               let smoothedRoot = new Array(12).fill(0), smoothedChroma = new Array(12).fill(0);
@@ -534,20 +569,31 @@ jobs:
               const audioEl = document.getElementById("audioElement");
 
               function initAudioEngine() {
-                if (audioCtx) {
-                  if (audioCtx.state === "suspended") audioCtx.resume();
-                  return;
+                if (!audioCtx) {
+                  try {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    analyser = audioCtx.createAnalyser();
+                    analyser.fftSize = 8192;
+                    analyser.smoothingTimeConstant = 0.82;
+                    analyser.connect(audioCtx.destination);
+                  } catch (e) {}
                 }
-                try {
-                  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                  analyser = audioCtx.createAnalyser();
-                  analyser.fftSize = 8192;
-                  analyser.smoothingTimeConstant = 0.82;
-                  mediaSource = audioCtx.createMediaElementSource(audioEl);
-                  mediaSource.connect(analyser);
-                  analyser.connect(audioCtx.destination);
-                  requestAnimationFrame(dspLoop);
-                } catch (e) {}
+                
+                if (audioCtx.state === "suspended") {
+                  audioCtx.resume();
+                }
+
+                if (!isSourceConnected && audioEl) {
+                  try {
+                    mediaSource = audioCtx.createMediaElementSource(audioEl);
+                    mediaSource.connect(analyser);
+                    isSourceConnected = true;
+                    requestAnimationFrame(dspLoop);
+                  } catch (e) {
+                    isSourceConnected = true;
+                    requestAnimationFrame(dspLoop);
+                  }
+                }
               }
 
               function dspLoop() {
@@ -710,7 +756,7 @@ jobs:
                   [...new Set(filtered.map(t => t.artist))].forEach(artist => {
                     const artistTracks = tracks.filter(t => t.artist === artist);
                     const div = document.createElement("div");
-                    div.className = "glass-card p-3 rounded-xl flex items-center justify-between cursor-pointer";
+                    div.className = `glass-card p-3 rounded-xl flex items-center justify-between cursor-pointer`;
                     div.onclick = () => renderLibrary("artist", artist);
                     div.innerHTML = `<div class="flex items-center gap-3"><img src="${artistTracks[0]?.cover}" class="w-10 h-10 rounded-full object-cover border border-purple-500/40" /><div><h4 class="text-sm font-semibold text-white">${artist}</h4><p class="text-xs text-purple-300/65">${artistTracks.length} pistas</p></div></div><i class="fa-solid fa-chevron-right text-purple-400 text-xs"></i>`;
                     container.appendChild(div);
@@ -747,7 +793,7 @@ jobs:
                 const coverFile = document.getElementById("editCoverFile").files[0];
                 const save = () => {
                   customOverrides[t.id] = { title: t.title, artist: t.artist, album: t.album, cover: t.cover };
-                  localStorage.setItem("cosmos_overrides_v7", JSON.stringify(customOverrides));
+                  localStorage.setItem("cosmos_overrides_v10", JSON.stringify(customOverrides));
                   loadTrack(currentTrackIndex, isPlaying);
                 };
                 if(coverFile) {
