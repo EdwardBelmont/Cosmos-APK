@@ -35,66 +35,12 @@ jobs:
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
           echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
 
-      - name: Configurar Recursos, Icono y Splash Nativo
+      - name: Crear Estructura Gradle y Archivos de COSMOS Master Edition
         run: |
           mkdir -p app/src/main/java/com/belmont/cosmos
           mkdir -p app/src/main/assets
-          mkdir -p app/src/main/res/values
-          mkdir -p app/src/main/res/drawable
-          mkdir -p app/src/main/res/mipmap-anydpi-v26
 
-          # 1. ICONO VECTORIAL OFICIAL DE COSMOS (XML)
-          cat << 'EOF' > app/src/main/res/drawable/ic_cosmos_launcher.xml
-          <vector xmlns:android="http://schemas.android.com/apk/res/android"
-              android:width="108dp"
-              android:height="108dp"
-              android:viewportWidth="100"
-              android:viewportHeight="100">
-              <path android:fillColor="#040109" android:pathData="M0,0h100v100H0z"/>
-              <path android:strokeColor="#e879f9" android:strokeWidth="1.8" android:pathData="M14,44 A36,36 0 0,1 86,44" android:fillColor="@null"/>
-              <path android:fillColor="#f0abfc" android:pathData="M50,8 L16,62 L34,62 L50,32 Z"/>
-              <path android:fillColor="#a855f7" android:pathData="M50,8 L84,62 L66,62 L50,32 Z"/>
-              <path android:fillColor="#9333ea" android:pathData="M36,58 L50,92 L64,58 L50,68 Z"/>
-              <path android:fillColor="#ffffff" android:pathData="M50,39 L56,50 L50,61 L44,50 Z"/>
-          </vector>
-          EOF
-
-          cat << 'EOF' > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
-          <?xml version="1.0" encoding="utf-8"?>
-          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-              <background android:color="#040109"/>
-              <foreground android:drawable="@drawable/ic_cosmos_launcher"/>
-          </adaptive-icon>
-          EOF
-
-          cat << 'EOF' > app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
-          <?xml version="1.0" encoding="utf-8"?>
-          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-              <background android:color="#040109"/>
-              <foreground android:drawable="@drawable/ic_cosmos_launcher"/>
-          </adaptive-icon>
-          EOF
-
-          # 2. TEMA SPLASH SCREEN NATIVO SIN BORDES GRISES
-          cat << 'EOF' > app/src/main/res/values/styles.xml
-          <?xml version="1.0" encoding="utf-8"?>
-          <resources>
-              <style name="Theme.CosmosSplash" parent="android:Theme.DeviceDefault.NoActionBar">
-                  <item name="android:windowBackground">@color/cosmos_void</item>
-                  <item name="android:statusBarColor">#040109</item>
-                  <item name="android:navigationBarColor">#040109</item>
-              </style>
-          </resources>
-          EOF
-
-          cat << 'EOF' > app/src/main/res/values/colors.xml
-          <?xml version="1.0" encoding="utf-8"?>
-          <resources>
-              <color name="cosmos_void">#040109</color>
-          </resources>
-          EOF
-
-          # 3. SETTINGS.GRADLE
+          # 1. SETTINGS.GRADLE
           cat << 'EOF' > settings.gradle
           pluginManagement {
               repositories { google(); mavenCentral(); gradlePluginPortal() }
@@ -107,7 +53,7 @@ jobs:
           include ':app'
           EOF
 
-          # 4. BUILD.GRADLE GLOBAL
+          # 2. BUILD.GRADLE GLOBAL
           cat << 'EOF' > build.gradle
           plugins {
               id 'com.android.application' version '8.2.2' apply false
@@ -115,13 +61,13 @@ jobs:
           }
           EOF
 
-          # 5. GRADLE PROPERTIES
+          # 3. GRADLE PROPERTIES
           cat << 'EOF' > gradle.properties
           org.gradle.jvmargs=-Xmx2048m
           android.useAndroidX=true
           EOF
 
-          # 6. APP/BUILD.GRADLE
+          # 4. APP/BUILD.GRADLE
           cat << 'EOF' > app/build.gradle
           plugins {
               id 'com.android.application'
@@ -150,7 +96,7 @@ jobs:
           }
           EOF
 
-          # 7. ANDROIDMANIFEST.XML CON ICONOS Y TEMA SPLASH
+          # 5. ANDROIDMANIFEST.XML
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -161,9 +107,8 @@ jobs:
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
               <application
                   android:label="COSMOS"
-                  android:icon="@mipmap/ic_launcher"
-                  android:roundIcon="@mipmap/ic_launcher_round"
-                  android:theme="@style/Theme.CosmosSplash"
+                  android:icon="@android:drawable/ic_media_play"
+                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
                   android:usesCleartextTraffic="true">
                   <activity
                       android:name=".MainActivity"
@@ -178,7 +123,7 @@ jobs:
           </manifest>
           EOF
 
-          # 8. KOTLIN MAINACTIVITY
+          # 6. KOTLIN MAINACTIVITY COMPLETO
           cat << 'EOF' > app/src/main/java/com/belmont/cosmos/MainActivity.kt
           package com.belmont.cosmos
 
@@ -361,8 +306,11 @@ jobs:
                       .setSmallIcon(android.R.drawable.ic_media_play)
                       .setContentTitle(title)
                       .setContentText("$artist • $album")
+                      .setSubtext("COSMOS • Belmont Edition")
                       .setOngoing(isPlaying)
                       .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                      .setColor(android.graphics.Color.parseColor("#9333ea"))
+                      .setColorized(true)
                       .addAction(android.R.drawable.ic_media_previous, "Anterior", prevPending)
                       .addAction(playPauseIcon, if (isPlaying) "Pausa" else "Play", togglePending)
                       .addAction(android.R.drawable.ic_media_next, "Siguiente", nextPending)
@@ -379,7 +327,7 @@ jobs:
           }
           EOF
 
-          # 9. INTERFAZ HTML MAESTRA COMPLETA
+          # 7. INTERFAZ HTML COMPLETA Y BLINDADA
           cat << 'EOF' > app/src/main/assets/index.html
           <!DOCTYPE html>
           <html lang="es">
@@ -534,7 +482,7 @@ jobs:
                   <div class="flex items-center gap-3"><span class="text-xs text-purple-300 w-16 font-mono">60 Hz</span><input type="range" id="eq-0" min="-12" max="12" value="5" oninput="updateEqBand(0, this.value)" class="flex-1" /><span id="eq-val-0" class="text-xs text-purple-200 w-10 text-right font-mono">+5dB</span></div>
                   <div class="flex items-center gap-3"><span class="text-xs text-purple-300 w-16 font-mono">230 Hz</span><input type="range" id="eq-1" min="-12" max="12" value="2" oninput="updateEqBand(1, this.value)" class="flex-1" /><span id="eq-val-1" class="text-xs text-purple-200 w-10 text-right font-mono">+2dB</span></div>
                   <div class="flex items-center gap-3"><span class="text-xs text-purple-300 w-16 font-mono">910 Hz</span><input type="range" id="eq-2" min="-12" max="12" value="0" oninput="updateEqBand(2, this.value)" class="flex-1" /><span id="eq-val-2" class="text-xs text-purple-200 w-10 text-right font-mono">0dB</span></div>
-                  <div class="flex items-center gap-3"><span class="text-xs text-purple-300 w-16 font-mono">3.6 kHz</span><input type="range" id="eq-3" min="-12" max="12" value="4" oninput="updateEqBand(3, this.value)" class="flex-1" /><span id="eq-val-3" class="text-xs text-purple-200 w-10 text-right font-mono">+4dB</span></div>
+                  <div class="flex items-center gap-3"><span class="text-xs text-purple-300 w-16 font-mono">3.6 kHz</span><input type="range" id="eq-3" min="-12" max="12" value="4" oninput="updateEqBand(3, this.value)" class="flex-1" /><span id="eq-val-3" class="text-xs text-purple-200 w-10 text-right font-mono">+3dB</span></div>
                   <div class="flex items-center gap-3"><span class="text-xs text-purple-300 w-16 font-mono">14 kHz</span><input type="range" id="eq-4" min="-12" max="12" value="6" oninput="updateEqBand(4, this.value)" class="flex-1" /><span id="eq-val-4" class="text-xs text-purple-200 w-10 text-right font-mono">+6dB</span></div>
                 </div>
               </div>
@@ -553,7 +501,7 @@ jobs:
             <script>
               const fallbackCoverSvg = "data:image/svg+xml;utf8," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300"><rect width="300" height="300" fill="#06020d"/><circle cx="150" cy="150" r="105" fill="none" stroke="#9333ea" stroke-width="2" opacity="0.4"/><path d="M85 138 A68 68 0 0 1 215 138" fill="none" stroke="#f0abfc" stroke-width="5" stroke-linecap="round"/><polygon points="150,65 92,165 122,165 150,110" fill="#ffffff"/><polygon points="150,65 208,165 178,165 150,110" fill="#c084fc"/><polygon points="128,160 150,225 172,160 150,180" fill="#e879f9"/><polygon points="150,126 160,146 150,166 140,146" fill="#ffffff"/></svg>`);
 
-              let tracks = [], customOverrides = JSON.parse(localStorage.getItem("cosmos_overrides_v4")) || {}, playlists = [];
+              let tracks = [], customOverrides = JSON.parse(localStorage.getItem("cosmos_overrides_v6")) || {}, playlists = [];
               let currentTab = "songs", currentTrackIndex = -1, isPlaying = false, shuffleMode = false, repeatMode = 0;
 
               window.onNativeLibraryLoaded = function(jsonArray) {
@@ -584,27 +532,36 @@ jobs:
                 }
               }
 
-              // DSP RECONOCEDOR DE ACORDES MAESTRO
+              // DSP RECONOCEDOR DE ACORDES MAESTRO BLINDADO
               let audioCtx = null, analyser = null, mediaSource = null;
               let chordDetectionMode = "power";
               const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
               let smoothedRoot = new Array(12).fill(0), smoothedChroma = new Array(12).fill(0);
               let lockedPitch = -1, lockedQuality = "", prevChordName = "--", lockTime = 0, challenger = -1, challengerCount = 0;
-              const HOLD_MS = 1600;
+              const HOLD_MS = 1400;
               const audioEl = document.getElementById("audioElement");
 
               function initAudioEngine() {
-                if (audioCtx) return;
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                analyser = audioCtx.createAnalyser(); analyser.fftSize = 8192; analyser.smoothingTimeConstant = 0.82;
-                mediaSource = audioCtx.createMediaElementSource(audioEl);
-                mediaSource.connect(analyser); analyser.connect(audioCtx.destination);
-                requestAnimationFrame(dspLoop);
+                if (audioCtx) {
+                  if (audioCtx.state === "suspended") audioCtx.resume();
+                  return;
+                }
+                try {
+                  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                  analyser = audioCtx.createAnalyser();
+                  analyser.fftSize = 8192;
+                  analyser.smoothingTimeConstant = 0.82;
+                  mediaSource = audioCtx.createMediaElementSource(audioEl);
+                  mediaSource.connect(analyser);
+                  analyser.connect(audioCtx.destination);
+                  requestAnimationFrame(dspLoop);
+                } catch (e) {}
               }
 
               function dspLoop() {
-                if (isPlaying && analyser) {
-                  const bufLen = analyser.frequencyBinCount; const fftDb = new Float32Array(bufLen);
+                if (isPlaying && analyser && audioCtx) {
+                  const bufLen = analyser.frequencyBinCount;
+                  const fftDb = new Float32Array(bufLen);
                   analyser.getFloatFrequencyData(fftDb);
                   const instRoot = new Array(12).fill(0), instChroma = new Array(12).fill(0);
                   const binW = audioCtx.sampleRate / analyser.fftSize;
@@ -641,14 +598,15 @@ jobs:
                     let bestIdx = 0; for(let i=1; i<12; i++) if(smoothedRoot[i] > smoothedRoot[bestIdx]) bestIdx = i;
                     const now = performance.now();
                     const elapsed = now - lockTime;
-                    document.getElementById("measureLockBar").style.width = `${Math.min(100, Math.round((elapsed / HOLD_MS) * 100))}%`;
+                    const barElem = document.getElementById("measureLockBar");
+                    if(barElem) barElem.style.width = `${Math.min(100, Math.round((elapsed / HOLD_MS) * 100))}%`;
 
                     if(lockedPitch === -1) {
                       lockChord(bestIdx, now);
                     } else if(bestIdx !== lockedPitch) {
-                      if(smoothedRoot[bestIdx] > smoothedRoot[lockedPitch] * (elapsed < HOLD_MS ? 1.45 : 1.2)) {
+                      if(smoothedRoot[bestIdx] > smoothedRoot[lockedPitch] * (elapsed < HOLD_MS ? 1.4 : 1.15)) {
                         if(challenger === bestIdx) challengerCount++; else { challenger = bestIdx; challengerCount = 1; }
-                        if(challengerCount >= 14) lockChord(bestIdx, now);
+                        if(challengerCount >= 10) lockChord(bestIdx, now);
                       } else challengerCount = Math.max(0, challengerCount - 1);
                     } else challengerCount = 0;
                   }
@@ -673,7 +631,7 @@ jobs:
                 document.getElementById("miniChordBadge").textContent = cur;
                 document.getElementById("currentChordBox").textContent = cur;
                 document.getElementById("prevChordBox").textContent = prevChordName;
-                document.getElementById("nextChordBox").textContent = `${NOTE_NAMES[lockedPitch]}5 (${NOTE_NAMES[(lockedPitch + 7) % 12]})`;
+                document.getElementById("nextChordBox").textContent = `${NOTE_NAMES[lockedPitch]}5`;
               }
 
               function toggleChordMode() {
@@ -797,7 +755,7 @@ jobs:
                 const coverFile = document.getElementById("editCoverFile").files[0];
                 const save = () => {
                   customOverrides[t.id] = { title: t.title, artist: t.artist, album: t.album, cover: t.cover };
-                  localStorage.setItem("cosmos_overrides_v4", JSON.stringify(customOverrides));
+                  localStorage.setItem("cosmos_overrides_v6", JSON.stringify(customOverrides));
                   loadTrack(currentTrackIndex, isPlaying);
                 };
                 if(coverFile) {
