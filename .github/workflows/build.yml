@@ -35,12 +35,66 @@ jobs:
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
           echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
 
-      - name: Crear Estructura Gradle y Archivos de COSMOS Master Edition
+      - name: Configurar Recursos, Icono y Splash Nativo
         run: |
           mkdir -p app/src/main/java/com/belmont/cosmos
           mkdir -p app/src/main/assets
+          mkdir -p app/src/main/res/values
+          mkdir -p app/src/main/res/drawable
+          mkdir -p app/src/main/res/mipmap-anydpi-v26
 
-          # 1. SETTINGS.GRADLE
+          # 1. ICONO VECTORIAL OFICIAL DE COSMOS (XML)
+          cat << 'EOF' > app/src/main/res/drawable/ic_cosmos_launcher.xml
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="100"
+              android:viewportHeight="100">
+              <path android:fillColor="#040109" android:pathData="M0,0h100v100H0z"/>
+              <path android:strokeColor="#e879f9" android:strokeWidth="1.8" android:pathData="M14,44 A36,36 0 0,1 86,44" android:fillColor="@null"/>
+              <path android:fillColor="#f0abfc" android:pathData="M50,8 L16,62 L34,62 L50,32 Z"/>
+              <path android:fillColor="#a855f7" android:pathData="M50,8 L84,62 L66,62 L50,32 Z"/>
+              <path android:fillColor="#9333ea" android:pathData="M36,58 L50,92 L64,58 L50,68 Z"/>
+              <path android:fillColor="#ffffff" android:pathData="M50,39 L56,50 L50,61 L44,50 Z"/>
+          </vector>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:color="#040109"/>
+              <foreground android:drawable="@drawable/ic_cosmos_launcher"/>
+          </adaptive-icon>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:color="#040109"/>
+              <foreground android:drawable="@drawable/ic_cosmos_launcher"/>
+          </adaptive-icon>
+          EOF
+
+          # 2. TEMA SPLASH SCREEN NATIVO SIN BORDES GRISES
+          cat << 'EOF' > app/src/main/res/values/styles.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="Theme.CosmosSplash" parent="android:Theme.DeviceDefault.NoActionBar">
+                  <item name="android:windowBackground">@color/cosmos_void</item>
+                  <item name="android:statusBarColor">#040109</item>
+                  <item name="android:navigationBarColor">#040109</item>
+              </style>
+          </resources>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/values/colors.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <color name="cosmos_void">#040109</color>
+          </resources>
+          EOF
+
+          # 3. SETTINGS.GRADLE
           cat << 'EOF' > settings.gradle
           pluginManagement {
               repositories { google(); mavenCentral(); gradlePluginPortal() }
@@ -53,7 +107,7 @@ jobs:
           include ':app'
           EOF
 
-          # 2. BUILD.GRADLE GLOBAL
+          # 4. BUILD.GRADLE GLOBAL
           cat << 'EOF' > build.gradle
           plugins {
               id 'com.android.application' version '8.2.2' apply false
@@ -61,13 +115,13 @@ jobs:
           }
           EOF
 
-          # 3. GRADLE PROPERTIES
+          # 5. GRADLE PROPERTIES
           cat << 'EOF' > gradle.properties
           org.gradle.jvmargs=-Xmx2048m
           android.useAndroidX=true
           EOF
 
-          # 4. APP/BUILD.GRADLE
+          # 6. APP/BUILD.GRADLE
           cat << 'EOF' > app/build.gradle
           plugins {
               id 'com.android.application'
@@ -96,7 +150,7 @@ jobs:
           }
           EOF
 
-          # 5. ANDROIDMANIFEST.XML
+          # 7. ANDROIDMANIFEST.XML CON ICONOS Y TEMA SPLASH
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -107,8 +161,9 @@ jobs:
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
               <application
                   android:label="COSMOS"
-                  android:icon="@android:drawable/ic_media_play"
-                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
+                  android:icon="@mipmap/ic_launcher"
+                  android:roundIcon="@mipmap/ic_launcher_round"
+                  android:theme="@style/Theme.CosmosSplash"
                   android:usesCleartextTraffic="true">
                   <activity
                       android:name=".MainActivity"
@@ -123,7 +178,7 @@ jobs:
           </manifest>
           EOF
 
-          # 6. KOTLIN MAINACTIVITY
+          # 8. KOTLIN MAINACTIVITY
           cat << 'EOF' > app/src/main/java/com/belmont/cosmos/MainActivity.kt
           package com.belmont.cosmos
 
@@ -324,7 +379,7 @@ jobs:
           }
           EOF
 
-          # 7. INTERFAZ HTML MAESTRA CON LOGO NEÓN, NAVEGACIÓN ELEGANTE Y DSP AVANZADO DE ACORDES
+          # 9. INTERFAZ HTML MAESTRA COMPLETA
           cat << 'EOF' > app/src/main/assets/index.html
           <!DOCTYPE html>
           <html lang="es">
@@ -337,91 +392,23 @@ jobs:
             <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
             <style>
               @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Montserrat:wght@200;300;400;600&family=Inter:wght@300;400;500;600;700&display=swap');
-
-              :root {
-                --bg-void: #040109;
-                --neon-purple: #c084fc;
-                --neon-pink: #e879f9;
-              }
-
-              body {
-                background-color: var(--bg-void);
-                color: #f3e8ff;
-                font-family: 'Inter', sans-serif;
-                overflow-x: hidden;
-                user-select: none;
-                -webkit-tap-highlight-color: transparent;
-              }
-
-              .digital-cosmos {
-                font-family: 'Share Tech Mono', monospace;
-                letter-spacing: 0.28em;
-                text-shadow: 0 0 14px rgba(217, 70, 239, 0.85), 0 0 26px rgba(147, 51, 234, 0.6);
-              }
-
-              .belmont-thin {
-                font-family: 'Montserrat', sans-serif;
-                font-weight: 200;
-                letter-spacing: 0.36em;
-              }
-
-              .cosmos-bg {
-                background:
-                  radial-gradient(circle at 50% -10%, rgba(168, 85, 247, 0.32) 0%, transparent 55%),
-                  radial-gradient(circle at 85% 60%, rgba(217, 70, 239, 0.14) 0%, transparent 45%),
-                  linear-gradient(180deg, #080312 0%, #040109 100%);
-              }
-
-              .glass-card {
-                background: rgba(17, 8, 32, 0.88);
-                backdrop-filter: blur(20px);
-                border: 1px solid rgba(192, 132, 252, 0.24);
-                box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-              }
-
-              .neon-chord-box {
-                background: linear-gradient(160deg, rgba(107, 33, 168, 0.65) 0%, rgba(12, 5, 23, 0.98) 100%);
-                border: 1.5px solid #e879f9;
-                box-shadow: 0 0 28px rgba(217, 70, 239, 0.45), inset 0 0 14px rgba(192, 132, 252, 0.3);
-              }
-
-              input[type="range"] {
-                -webkit-appearance: none;
-                appearance: none;
-                background: #23113b;
-                height: 4px;
-                border-radius: 999px;
-                outline: none;
-              }
-              input[type="range"]::-webkit-slider-thumb {
-                -webkit-appearance: none;
-                appearance: none;
-                width: 14px;
-                height: 14px;
-                border-radius: 50%;
-                background: #f5d0fe;
-                box-shadow: 0 0 14px #d946ef;
-                cursor: pointer;
-              }
-
+              :root { --bg-void: #040109; --neon-purple: #c084fc; --neon-pink: #e879f9; }
+              body { background-color: var(--bg-void); color: #f3e8ff; font-family: 'Inter', sans-serif; overflow-x: hidden; user-select: none; -webkit-tap-highlight-color: transparent; }
+              .digital-cosmos { font-family: 'Share Tech Mono', monospace; letter-spacing: 0.28em; text-shadow: 0 0 14px rgba(217, 70, 239, 0.85), 0 0 26px rgba(147, 51, 234, 0.6); }
+              .belmont-thin { font-family: 'Montserrat', sans-serif; font-weight: 200; letter-spacing: 0.36em; }
+              .cosmos-bg { background: radial-gradient(circle at 50% -10%, rgba(168, 85, 247, 0.32) 0%, transparent 55%), radial-gradient(circle at 85% 60%, rgba(217, 70, 239, 0.14) 0%, transparent 45%), linear-gradient(180deg, #080312 0%, #040109 100%); }
+              .glass-card { background: rgba(17, 8, 32, 0.88); backdrop-filter: blur(20px); border: 1px solid rgba(192, 132, 252, 0.24); box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4); }
+              .neon-chord-box { background: linear-gradient(160deg, rgba(107, 33, 168, 0.65) 0%, rgba(12, 5, 23, 0.98) 100%); border: 1.5px solid #e879f9; box-shadow: 0 0 28px rgba(217, 70, 239, 0.45), inset 0 0 14px rgba(192, 132, 252, 0.3); }
+              input[type="range"] { -webkit-appearance: none; appearance: none; background: #23113b; height: 4px; border-radius: 999px; outline: none; }
+              input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #f5d0fe; box-shadow: 0 0 14px #d946ef; cursor: pointer; }
               .no-scrollbar::-webkit-scrollbar { display: none; }
             </style>
           </head>
           <body class="cosmos-bg min-h-screen flex flex-col justify-between pb-40">
-
-            <!-- LOGO VECTORIAL MAESTRO DE COSMOS -->
             <svg class="hidden">
               <defs>
-                <linearGradient id="crestLeft" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stop-color="#ffffff" />
-                  <stop offset="45%" stop-color="#f0abfc" />
-                  <stop offset="100%" stop-color="#9333ea" />
-                </linearGradient>
-                <linearGradient id="crestRight" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stop-color="#e9d5ff" />
-                  <stop offset="50%" stop-color="#a855f7" />
-                  <stop offset="100%" stop-color="#4c1d95" />
-                </linearGradient>
+                <linearGradient id="crestLeft" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#ffffff" /><stop offset="45%" stop-color="#f0abfc" /><stop offset="100%" stop-color="#9333ea" /></linearGradient>
+                <linearGradient id="crestRight" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#e9d5ff" /><stop offset="50%" stop-color="#a855f7" /><stop offset="100%" stop-color="#4c1d95" /></linearGradient>
                 <g id="cosmosMasterLogo">
                   <circle cx="50" cy="50" r="45" fill="none" stroke="#e879f9" stroke-width="1.8" opacity="0.5" />
                   <path d="M 14 44 A 36 36 0 0 1 86 44" fill="none" stroke="url(#crestLeft)" stroke-width="3" stroke-linecap="round" opacity="0.95" />
@@ -433,7 +420,6 @@ jobs:
               </defs>
             </svg>
 
-            <!-- HEADER / BARRA NAVEGADORA PREMIUM -->
             <header class="sticky top-0 z-30 glass-card px-4 py-3 flex items-center justify-between border-b border-purple-800/40">
               <div class="flex items-center gap-3">
                 <div class="w-11 h-11 rounded-2xl bg-gradient-to-br from-purple-900/90 to-purple-950 border border-fuchsia-500/50 flex items-center justify-center shadow-[0_0_20px_rgba(217,70,239,0.35)]">
@@ -444,35 +430,17 @@ jobs:
                   <p class="belmont-thin text-[7.5px] text-fuchsia-300 uppercase tracking-[0.3em] mt-1">Belmont Edition</p>
                 </div>
               </div>
-
               <div class="flex items-center gap-2">
-                <button onclick="openModal('timerModal')" class="px-2.5 py-1.5 rounded-xl bg-purple-950/80 border border-purple-600/40 text-xs text-purple-200 flex items-center gap-1.5 shadow-inner">
-                  <i class="fa-regular fa-clock text-fuchsia-400 text-[11px]"></i>
-                  <span id="timerText" class="text-[10px] font-mono">Off</span>
-                </button>
-                <button onclick="openModal('eqModal')" class="w-9 h-9 rounded-xl bg-purple-950/80 border border-purple-600/40 text-purple-200 flex items-center justify-center shadow-inner hover:border-fuchsia-400 transition">
-                  <i class="fa-solid fa-sliders text-xs"></i>
-                </button>
-                <button onclick="rescanPhoneLibrary()" class="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-purple-700 via-purple-600 to-fuchsia-600 text-white text-xs font-semibold flex items-center gap-1.5 shadow-lg shadow-purple-900/60 active:scale-95 border border-fuchsia-400/30">
-                  <i class="fa-solid fa-rotate"></i> Escanear
-                </button>
+                <button onclick="openModal('timerModal')" class="px-2.5 py-1.5 rounded-xl bg-purple-950/80 border border-purple-600/40 text-xs text-purple-200 flex items-center gap-1.5 shadow-inner"><i class="fa-regular fa-clock text-fuchsia-400 text-[11px]"></i><span id="timerText" class="text-[10px] font-mono">Off</span></button>
+                <button onclick="openModal('eqModal')" class="w-9 h-9 rounded-xl bg-purple-950/80 border border-purple-600/40 text-purple-200 flex items-center justify-center shadow-inner"><i class="fa-solid fa-sliders text-xs"></i></button>
+                <button onclick="rescanPhoneLibrary()" class="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-purple-700 via-purple-600 to-fuchsia-600 text-white text-xs font-semibold flex items-center gap-1.5 shadow-lg active:scale-95 border border-fuchsia-400/30"><i class="fa-solid fa-rotate"></i> Escanear</button>
               </div>
             </header>
 
-            <!-- BUSCADOR -->
-            <div class="px-4 pt-3.5">
-              <div class="relative">
-                <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-3 text-fuchsia-400/60 text-xs"></i>
-                <input type="text" id="searchInput" oninput="renderLibrary()" placeholder="Buscar canción, artista o álbum..." 
-                  class="w-full pl-9 pr-4 py-2.5 rounded-xl bg-purple-950/45 border border-purple-700/35 text-xs sm:text-sm text-purple-100 placeholder-purple-300/40 focus:outline-none focus:border-fuchsia-400 shadow-inner" />
-              </div>
-            </div>
+            <div class="px-4 pt-3.5"><div class="relative"><i class="fa-solid fa-magnifying-glass absolute left-3.5 top-3 text-fuchsia-400/60 text-xs"></i><input type="text" id="searchInput" oninput="renderLibrary()" placeholder="Buscar canción, artista o álbum..." class="w-full pl-9 pr-4 py-2.5 rounded-xl bg-purple-950/45 border border-purple-700/35 text-xs sm:text-sm text-purple-100 placeholder-purple-300/40 focus:outline-none focus:border-fuchsia-400 shadow-inner" /></div></div>
 
-            <!-- PESTAÑAS DE NAVEGACIÓN -->
             <nav class="flex gap-2 px-4 py-3 overflow-x-auto no-scrollbar">
-              <button onclick="switchTab('songs')" id="tab-songs" class="px-4 py-1.5 rounded-xl text-xs font-medium bg-gradient-to-r from-purple-700 to-fuchsia-600 text-white shadow-md shadow-purple-900/50 border border-fuchsia-400/30 whitespace-nowrap">
-                Canciones (<span id="countSongs">0</span>)
-              </button>
+              <button onclick="switchTab('songs')" id="tab-songs" class="px-4 py-1.5 rounded-xl text-xs font-medium bg-gradient-to-r from-purple-700 to-fuchsia-600 text-white shadow-md shadow-purple-900/50 border border-fuchsia-400/30 whitespace-nowrap">Canciones (<span id="countSongs">0</span>)</button>
               <button onclick="switchTab('artists')" id="tab-artists" class="px-4 py-1.5 rounded-xl text-xs font-medium bg-purple-950/50 text-purple-300/80 border border-purple-800/40 whitespace-nowrap">Artistas</button>
               <button onclick="switchTab('albums')" id="tab-albums" class="px-4 py-1.5 rounded-xl text-xs font-medium bg-purple-950/50 text-purple-300/80 border border-purple-800/40 whitespace-nowrap">Álbumes</button>
               <button onclick="switchTab('playlists')" id="tab-playlists" class="px-4 py-1.5 rounded-xl text-xs font-medium bg-purple-950/50 text-purple-300/80 border border-purple-800/40 whitespace-nowrap">Playlists</button>
@@ -480,110 +448,54 @@ jobs:
 
             <main id="libraryContainer" class="px-4 flex-1 space-y-2 overflow-y-auto"></main>
 
-            <footer class="mt-6 mb-2 text-center pointer-events-none">
-              <p class="belmont-thin text-[8px] uppercase text-purple-300 opacity-25">Desarrollado por Edward Belmont</p>
-            </footer>
+            <footer class="mt-6 mb-2 text-center pointer-events-none"><p class="belmont-thin text-[8px] uppercase text-purple-300 opacity-25">Desarrollado por Edward Belmont</p></footer>
 
-            <!-- MINI REPRODUCTOR FLOTANTE -->
             <div class="fixed bottom-0 left-0 right-0 z-40 p-2 bg-gradient-to-t from-[#040109] via-[#040109]/95 to-transparent">
               <div class="glass-card rounded-2xl p-3 shadow-2xl border border-purple-500/30">
                 <div class="flex items-center justify-between gap-3">
                   <div class="flex items-center gap-3 flex-1 min-w-0 cursor-pointer" onclick="openModal('playerModal')">
                     <img id="miniCover" src="" class="w-12 h-12 rounded-xl object-cover border border-purple-400/35 bg-purple-950/60 shrink-0" />
                     <div class="min-w-0 flex-1">
-                      <div class="flex items-center gap-2">
-                        <h3 id="miniTitle" class="font-semibold text-sm text-white truncate">Cargando biblioteca...</h3>
-                        <span id="miniChordBadge" class="px-2 py-0.5 text-[11px] font-bold rounded bg-fuchsia-700/90 text-white border border-fuchsia-300/60 font-mono shrink-0 shadow">--</span>
-                      </div>
+                      <div class="flex items-center gap-2"><h3 id="miniTitle" class="font-semibold text-sm text-white truncate">Cargando biblioteca...</h3><span id="miniChordBadge" class="px-2 py-0.5 text-[11px] font-bold rounded bg-fuchsia-700/90 text-white border border-fuchsia-300/60 font-mono shrink-0 shadow">--</span></div>
                       <p id="miniArtist" class="text-xs text-purple-300/70 truncate">COSMOS Native Engine</p>
                     </div>
                   </div>
-
                   <div class="flex items-center gap-1.5">
-                    <button onclick="prevTrack()" class="w-8 h-8 rounded-full flex items-center justify-center text-purple-200 active:scale-90"><i class="fa-solid fa-backward-step"></i></button>
-                    <button onclick="togglePlay()" id="miniPlayBtn" class="w-10 h-10 rounded-full bg-gradient-to-tr from-purple-600 to-fuchsia-500 text-white flex items-center justify-center shadow-md active:scale-95"><i class="fa-solid fa-play text-sm"></i></button>
-                    <button onclick="nextTrack()" class="w-8 h-8 rounded-full flex items-center justify-center text-purple-200 active:scale-90"><i class="fa-solid fa-forward-step"></i></button>
+                    <button onclick="prevTrack()" class="w-8 h-8 rounded-full flex items-center justify-center text-purple-200"><i class="fa-solid fa-backward-step"></i></button>
+                    <button onclick="togglePlay()" id="miniPlayBtn" class="w-10 h-10 rounded-full bg-gradient-to-tr from-purple-600 to-fuchsia-500 text-white flex items-center justify-center shadow-md"><i class="fa-solid fa-play text-sm"></i></button>
+                    <button onclick="nextTrack()" class="w-8 h-8 rounded-full flex items-center justify-center text-purple-200"><i class="fa-solid fa-forward-step"></i></button>
                     <button onclick="openModal('playerModal')" class="w-8 h-8 rounded-full bg-purple-950/80 text-purple-300 flex items-center justify-center"><i class="fa-solid fa-chevron-up text-xs"></i></button>
                   </div>
                 </div>
-
-                <div class="mt-2 flex items-center gap-2">
-                  <span id="miniCurrentTime" class="text-[10px] text-purple-300/70 w-8 font-mono">0:00</span>
-                  <input type="range" id="miniSeek" value="0" min="0" max="100" step="0.1" oninput="seekAudio(this.value)" class="flex-1" />
-                  <span id="miniDuration" class="text-[10px] text-purple-300/70 w-8 text-right font-mono">0:00</span>
-                </div>
+                <div class="mt-2 flex items-center gap-2"><span id="miniCurrentTime" class="text-[10px] text-purple-300/70 w-8 font-mono">0:00</span><input type="range" id="miniSeek" value="0" min="0" max="100" step="0.1" oninput="seekAudio(this.value)" class="flex-1" /><span id="miniDuration" class="text-[10px] text-purple-300/70 w-8 text-right font-mono">0:00</span></div>
               </div>
             </div>
 
-            <!-- MODAL REPRODUCTOR COMPLETO Y MOTOR DSP DE ACORDES -->
             <div id="playerModal" class="fixed inset-0 z-50 bg-[#040109]/98 backdrop-blur-2xl hidden flex-col justify-between p-4 sm:p-6 overflow-y-auto">
               <div class="flex items-center justify-between">
                 <button onclick="closeModal('playerModal')" class="w-9 h-9 rounded-xl bg-purple-950/80 border border-purple-800/40 text-purple-200 flex items-center justify-center"><i class="fa-solid fa-chevron-down text-sm"></i></button>
-                <div class="text-center">
-                  <span class="digital-cosmos text-[10px] uppercase text-fuchsia-300 block">COSMOS</span>
-                  <span id="fullAlbumName" class="text-xs font-medium text-purple-200 truncate max-w-[200px] block">Álbum</span>
-                </div>
+                <div class="text-center"><span class="digital-cosmos text-[10px] uppercase text-fuchsia-300 block">COSMOS</span><span id="fullAlbumName" class="text-xs font-medium text-purple-200 truncate max-w-[200px] block">Álbum</span></div>
                 <button onclick="openEditModal()" class="px-3 py-1.5 rounded-xl bg-purple-950/80 border border-purple-600/40 text-xs text-purple-200 flex items-center gap-1.5"><i class="fa-solid fa-pen text-[10px]"></i> Editar</button>
               </div>
-
               <div class="flex-1 flex flex-col items-center justify-center space-y-4 my-2">
                 <img id="fullCover" src="" class="w-52 h-52 sm:w-60 sm:h-60 rounded-2xl object-cover shadow-2xl border border-purple-400/35 bg-purple-950/40" />
-
-                <!-- PANEL DETECTOR DE ACORDES AVANZADO -->
                 <div class="w-full max-w-md glass-card rounded-2xl p-3.5 border border-purple-500/35">
                   <div class="flex items-center justify-between mb-2">
-                    <div class="flex items-center gap-2">
-                      <span class="w-2.5 h-2.5 rounded-full bg-fuchsia-400 animate-pulse"></span>
-                      <span class="text-[10px] font-semibold uppercase tracking-wider text-purple-200">Reconocedor de Acordes Digital</span>
-                    </div>
+                    <div class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full bg-fuchsia-400 animate-pulse"></span><span class="text-[10px] font-semibold uppercase tracking-wider text-purple-200">Reconocedor de Acordes Digital</span></div>
                     <button onclick="toggleChordMode()" id="chordModeBtn" class="px-2.5 py-0.5 rounded-lg bg-purple-900/90 border border-fuchsia-400/40 text-[10px] text-purple-100 font-medium">Power / Tónica</button>
                   </div>
-
-                  <div class="w-full bg-black/60 h-1.5 rounded-full overflow-hidden mb-3 border border-purple-900/40">
-                    <div id="measureLockBar" class="bg-gradient-to-r from-purple-600 via-fuchsia-400 to-white h-full transition-all duration-100" style="width: 0%"></div>
-                  </div>
-
+                  <div class="w-full bg-black/60 h-1.5 rounded-full overflow-hidden mb-3 border border-purple-900/40"><div id="measureLockBar" class="bg-gradient-to-r from-purple-600 via-fuchsia-400 to-white h-full transition-all duration-100" style="width: 0%"></div></div>
                   <div class="grid grid-cols-3 gap-2.5 items-center text-center">
-                    <div class="p-2.5 rounded-xl bg-black/40 border border-purple-900/40">
-                      <span class="text-[9px] uppercase tracking-wider text-purple-400/70 block mb-0.5">Compás Ant.</span>
-                      <span id="prevChordBox" class="text-base font-bold text-purple-300 font-mono">--</span>
-                    </div>
-                    <div class="p-3 rounded-xl neon-chord-box transform scale-105">
-                      <span class="text-[9px] text-fuchsia-200 uppercase font-semibold tracking-wider block mb-0.5">En Compás</span>
-                      <span id="currentChordBox" class="text-3xl font-extrabold text-white tracking-tight font-mono">--</span>
-                    </div>
-                    <div class="p-2.5 rounded-xl bg-black/40 border border-purple-900/40">
-                      <span class="text-[9px] uppercase tracking-wider text-purple-400/70 block mb-0.5">5ta (Power)</span>
-                      <span id="nextChordBox" class="text-base font-bold text-purple-200 font-mono">--</span>
-                    </div>
+                    <div class="p-2.5 rounded-xl bg-black/40 border border-purple-900/40"><span class="text-[9px] uppercase tracking-wider text-purple-400/70 block mb-0.5">Compás Ant.</span><span id="prevChordBox" class="text-base font-bold text-purple-300 font-mono">--</span></div>
+                    <div class="p-3 rounded-xl neon-chord-box transform scale-105"><span class="text-[9px] text-fuchsia-200 uppercase font-semibold tracking-wider block mb-0.5">En Compás</span><span id="currentChordBox" class="text-3xl font-extrabold text-white tracking-tight font-mono">--</span></div>
+                    <div class="p-2.5 rounded-xl bg-black/40 border border-purple-900/40"><span class="text-[9px] uppercase tracking-wider text-purple-400/70 block mb-0.5">5ta (Power)</span><span id="nextChordBox" class="text-base font-bold text-purple-200 font-mono">--</span></div>
                   </div>
-
-                  <div class="mt-3">
-                    <div id="chromaBars" class="grid grid-cols-12 gap-1 h-9 items-end pt-1.5 px-1.5 bg-black/50 rounded-lg border border-purple-900/30"></div>
-                    <div class="grid grid-cols-12 gap-1 text-[9px] text-center text-purple-300/80 font-mono mt-1 font-semibold">
-                      <span>C</span><span>C#</span><span>D</span><span>D#</span><span>E</span><span>F</span><span>F#</span><span>G</span><span>G#</span><span>A</span><span>A#</span><span>B</span>
-                    </div>
-                  </div>
+                  <div class="mt-3"><div id="chromaBars" class="grid grid-cols-12 gap-1 h-9 items-end pt-1.5 px-1.5 bg-black/50 rounded-lg border border-purple-900/30"></div><div class="grid grid-cols-12 gap-1 text-[9px] text-center text-purple-300/80 font-mono mt-1 font-semibold"><span>C</span><span>C#</span><span>D</span><span>D#</span><span>E</span><span>F</span><span>F#</span><span>G</span><span>G#</span><span>A</span><span>A#</span><span>B</span></div></div>
                 </div>
               </div>
-
               <div class="space-y-2.5 pt-1">
-                <div class="flex items-center justify-between">
-                  <div class="min-w-0 flex-1 pr-2">
-                    <h2 id="fullTitle" class="text-base sm:text-lg font-bold text-white truncate">Sin canción</h2>
-                    <p id="fullArtist" class="text-xs sm:text-sm text-purple-300/80 truncate">--</p>
-                  </div>
-                  <span id="fullGenreBadge" class="px-2.5 py-1 rounded-md text-[10px] bg-purple-950 border border-purple-600/40 text-purple-200 shrink-0">Space Rock</span>
-                </div>
-
-                <div>
-                  <input type="range" id="fullSeek" value="0" min="0" max="100" step="0.1" oninput="seekAudio(this.value)" class="w-full" />
-                  <div class="flex justify-between text-[11px] text-purple-300/70 mt-1 font-mono">
-                    <span id="fullCurrentTime">0:00</span>
-                    <span id="fullDuration">0:00</span>
-                  </div>
-                </div>
-
+                <div class="flex items-center justify-between"><div class="min-w-0 flex-1 pr-2"><h2 id="fullTitle" class="text-base sm:text-lg font-bold text-white truncate">Sin canción</h2><p id="fullArtist" class="text-xs sm:text-sm text-purple-300/80 truncate">--</p></div><span id="fullGenreBadge" class="px-2.5 py-1 rounded-md text-[10px] bg-purple-950 border border-purple-600/40 text-purple-200 shrink-0">Space Rock</span></div>
+                <div><input type="range" id="fullSeek" value="0" min="0" max="100" step="0.1" oninput="seekAudio(this.value)" class="w-full" /><div class="flex justify-between text-[11px] text-purple-300/70 mt-1 font-mono"><span id="fullCurrentTime">0:00</span><span id="fullDuration">0:00</span></div></div>
                 <div class="flex items-center justify-between px-2 pt-1">
                   <button onclick="toggleShuffle()" id="shuffleBtn" class="w-10 h-10 rounded-full flex items-center justify-center text-purple-400/50"><i class="fa-solid fa-shuffle text-base"></i></button>
                   <button onclick="prevTrack()" class="w-12 h-12 rounded-full bg-purple-950/90 border border-purple-800/40 flex items-center justify-center text-white text-lg active:scale-90"><i class="fa-solid fa-backward-step"></i></button>
@@ -595,13 +507,9 @@ jobs:
               </div>
             </div>
 
-            <!-- MODAL EDITAR -->
             <div id="editModal" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-md hidden items-center justify-center p-4">
               <div class="glass-card rounded-2xl w-full max-w-md p-5 space-y-3.5 border border-purple-500/40">
-                <div class="flex justify-between items-center border-b border-purple-800/40 pb-2">
-                  <h3 class="font-semibold text-sm text-purple-100">Modificar Información y Portada</h3>
-                  <button onclick="closeModal('editModal')" class="text-purple-400"><i class="fa-solid fa-xmark"></i></button>
-                </div>
+                <div class="flex justify-between items-center border-b border-purple-800/40 pb-2"><h3 class="font-semibold text-sm text-purple-100">Modificar Información y Portada</h3><button onclick="closeModal('editModal')" class="text-purple-400"><i class="fa-solid fa-xmark"></i></button></div>
                 <div class="space-y-3 text-xs">
                   <div><label class="text-purple-300/80 block mb-1">Nombre</label><input type="text" id="editTitle" class="w-full p-2.5 rounded-lg bg-purple-950/90 border border-purple-700/50 text-white" /></div>
                   <div class="grid grid-cols-2 gap-2">
@@ -610,20 +518,13 @@ jobs:
                   </div>
                   <div><label class="text-purple-300/80 block mb-1">Cambiar Portada</label><input type="file" id="editCoverFile" accept="image/*" class="w-full text-[11px] text-purple-300 file:mr-2 file:py-1.5 file:px-2 file:rounded-md file:border-0 file:bg-purple-700 file:text-white" /></div>
                 </div>
-                <div class="flex justify-end gap-2 pt-2">
-                  <button onclick="closeModal('editModal')" class="px-4 py-2 rounded-xl bg-purple-950 text-purple-300 text-xs">Cancelar</button>
-                  <button onclick="saveTrackEdits()" class="px-5 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white text-xs font-semibold">Guardar</button>
-                </div>
+                <div class="flex justify-end gap-2 pt-2"><button onclick="closeModal('editModal')" class="px-4 py-2 rounded-xl bg-purple-950 text-purple-300 text-xs">Cancelar</button><button onclick="saveTrackEdits()" class="px-5 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white text-xs font-semibold">Guardar</button></div>
               </div>
             </div>
 
-            <!-- MODAL ECUALIZADOR -->
             <div id="eqModal" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-md hidden items-center justify-center p-4">
               <div class="glass-card rounded-2xl w-full max-w-md p-5 space-y-4 border border-purple-500/40">
-                <div class="flex justify-between items-center border-b border-purple-800/40 pb-2">
-                  <h3 class="font-semibold text-sm text-purple-100">Ecualizador por Género</h3>
-                  <button onclick="closeModal('eqModal')" class="text-purple-400"><i class="fa-solid fa-xmark"></i></button>
-                </div>
+                <div class="flex justify-between items-center border-b border-purple-800/40 pb-2"><h3 class="font-semibold text-sm text-purple-100">Ecualizador por Género</h3><button onclick="closeModal('eqModal')" class="text-purple-400"><i class="fa-solid fa-xmark"></i></button></div>
                 <div class="flex flex-wrap gap-1.5">
                   <button onclick="applyEqPreset('Space Rock')" class="px-3 py-1 rounded-lg text-xs bg-purple-700 text-white">Space Rock</button>
                   <button onclick="applyEqPreset('Gothic Rock')" class="px-3 py-1 rounded-lg text-xs bg-purple-950 border border-purple-800 text-purple-300">Gothic Rock</button>
@@ -639,17 +540,10 @@ jobs:
               </div>
             </div>
 
-            <!-- MODAL TEMPORIZADOR -->
             <div id="timerModal" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-md hidden items-center justify-center p-4">
               <div class="glass-card rounded-2xl w-full max-w-sm p-5 space-y-3 border border-purple-500/40 text-center">
-                <div class="flex justify-between items-center border-b border-purple-800/40 pb-2">
-                  <h3 class="font-semibold text-sm text-purple-100">Temporizador de Apagado</h3>
-                  <button onclick="closeModal('timerModal')" class="text-purple-400"><i class="fa-solid fa-xmark"></i></button>
-                </div>
-                <div class="grid grid-cols-2 gap-2 pt-2">
-                  <button onclick="setSleepTimer(10)" class="p-2.5 rounded-xl bg-purple-950 border border-purple-800/40 text-xs font-medium">10 Min</button>
-                  <button onclick="setSleepTimer(20)" class="p-2.5 rounded-xl bg-purple-950 border border-purple-800/40 text-xs font-medium">20 Min</button>
-                </div>
+                <div class="flex justify-between items-center border-b border-purple-800/40 pb-2"><h3 class="font-semibold text-sm text-purple-100">Temporizador de Apagado</h3><button onclick="closeModal('timerModal')" class="text-purple-400"><i class="fa-solid fa-xmark"></i></button></div>
+                <div class="grid grid-cols-2 gap-2 pt-2"><button onclick="setSleepTimer(10)" class="p-2.5 rounded-xl bg-purple-950 border border-purple-800/40 text-xs font-medium">10 Min</button><button onclick="setSleepTimer(20)" class="p-2.5 rounded-xl bg-purple-950 border border-purple-800/40 text-xs font-medium">20 Min</button></div>
                 <button onclick="setSleepTimer(0)" class="w-full p-2.5 rounded-xl bg-red-950/50 border border-red-800/40 text-xs text-red-300 font-medium mt-2">Desactivar</button>
               </div>
             </div>
@@ -659,7 +553,7 @@ jobs:
             <script>
               const fallbackCoverSvg = "data:image/svg+xml;utf8," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300"><rect width="300" height="300" fill="#06020d"/><circle cx="150" cy="150" r="105" fill="none" stroke="#9333ea" stroke-width="2" opacity="0.4"/><path d="M85 138 A68 68 0 0 1 215 138" fill="none" stroke="#f0abfc" stroke-width="5" stroke-linecap="round"/><polygon points="150,65 92,165 122,165 150,110" fill="#ffffff"/><polygon points="150,65 208,165 178,165 150,110" fill="#c084fc"/><polygon points="128,160 150,225 172,160 150,180" fill="#e879f9"/><polygon points="150,126 160,146 150,166 140,146" fill="#ffffff"/></svg>`);
 
-              let tracks = [], customOverrides = JSON.parse(localStorage.getItem("cosmos_overrides_v3")) || {}, playlists = [];
+              let tracks = [], customOverrides = JSON.parse(localStorage.getItem("cosmos_overrides_v4")) || {}, playlists = [];
               let currentTab = "songs", currentTrackIndex = -1, isPlaying = false, shuffleMode = false, repeatMode = 0;
 
               window.onNativeLibraryLoaded = function(jsonArray) {
@@ -690,8 +584,8 @@ jobs:
                 }
               }
 
-              // DSP RECONOCEDOR DE ACORDES MAESTRO (BLOQUEO DE COMPÁS DE 1.6s)
-              let audioCtx = null, analyser = null, mediaSource = null, eqFilters = [];
+              // DSP RECONOCEDOR DE ACORDES MAESTRO
+              let audioCtx = null, analyser = null, mediaSource = null;
               let chordDetectionMode = "power";
               const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
               let smoothedRoot = new Array(12).fill(0), smoothedChroma = new Array(12).fill(0);
@@ -702,7 +596,7 @@ jobs:
               function initAudioEngine() {
                 if (audioCtx) return;
                 audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                analyser = audioCtx.createAnalyser(); analyser.fftSize = 8192; analyser.smoothingTimeConstant = 0.84;
+                analyser = audioCtx.createAnalyser(); analyser.fftSize = 8192; analyser.smoothingTimeConstant = 0.82;
                 mediaSource = audioCtx.createMediaElementSource(audioEl);
                 mediaSource.connect(analyser); analyser.connect(audioCtx.destination);
                 requestAnimationFrame(dspLoop);
@@ -717,10 +611,11 @@ jobs:
 
                   for (let b = Math.max(2, Math.floor(55/binW)); b < Math.min(bufLen-4, Math.ceil(880/binW)); b++) {
                     const db = fftDb[b];
-                    if (db > -78) {
-                      const freq = b * binW;
-                      const p = ((Math.round(12 * Math.log2(freq / 440) + 69) % 12) + 12) % 12;
+                    if (db > -78 && db >= fftDb[b-1] && db >= fftDb[b+1]) {
+                      const freq = (b + 0.5 * (fftDb[b-1] - fftDb[b+1]) / (fftDb[b-1] - 2*db + fftDb[b+1])) * binW;
+                      if (freq < 55 || freq > 880) continue;
                       const mag = Math.pow(10, db / 20);
+                      const p = ((Math.round(12 * Math.log2(freq / 440) + 69) % 12) + 12) % 12;
                       instChroma[p] += mag;
                       if (freq <= 350) instRoot[p] += mag * (freq < 190 ? 1.6 : 1.1);
                     }
@@ -743,9 +638,7 @@ jobs:
                   }
 
                   if(sig > 0.0015) {
-                    let best = 0; for(let i=1; i<12; i++) if(smoothedRoot[i] > smoothedRoot[best]) best = id; // Corrección bug índice
                     let bestIdx = 0; for(let i=1; i<12; i++) if(smoothedRoot[i] > smoothedRoot[bestIdx]) bestIdx = i;
-
                     const now = performance.now();
                     const elapsed = now - lockTime;
                     document.getElementById("measureLockBar").style.width = `${Math.min(100, Math.round((elapsed / HOLD_MS) * 100))}%`;
@@ -785,7 +678,7 @@ jobs:
 
               function toggleChordMode() {
                 chordDetectionMode = chordDetectionMode === "power" ? "triad" : "power";
-                document.getElementById("chordModeBtn").textContent = chordDetectionMode === "power" ? "Power / Tónica" : "Tríadas (m/Maj)";
+                document.getElementById("chordModeBtn").textContent = chordDetectionMode === "power" ? "Power / Tónica" : "Tríadas";
                 if(lockedPitch !== -1) renderChordUI();
               }
 
@@ -904,7 +797,7 @@ jobs:
                 const coverFile = document.getElementById("editCoverFile").files[0];
                 const save = () => {
                   customOverrides[t.id] = { title: t.title, artist: t.artist, album: t.album, cover: t.cover };
-                  localStorage.setItem("cosmos_overrides_v3", JSON.stringify(customOverrides));
+                  localStorage.setItem("cosmos_overrides_v4", JSON.stringify(customOverrides));
                   loadTrack(currentTrackIndex, isPlaying);
                 };
                 if(coverFile) {
