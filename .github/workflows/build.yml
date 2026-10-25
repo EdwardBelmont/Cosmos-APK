@@ -40,7 +40,6 @@ jobs:
           mkdir -p app/src/main/java/com/belmont/cosmos
           mkdir -p app/src/main/assets
 
-          # 1. SETTINGS.GRADLE
           cat << 'EOF' > settings.gradle
           pluginManagement {
               repositories { google(); mavenCentral(); gradlePluginPortal() }
@@ -53,7 +52,6 @@ jobs:
           include ':app'
           EOF
 
-          # 2. BUILD.GRADLE GLOBAL
           cat << 'EOF' > build.gradle
           plugins {
               id 'com.android.application' version '8.2.2' apply false
@@ -61,13 +59,11 @@ jobs:
           }
           EOF
 
-          # 3. GRADLE PROPERTIES
           cat << 'EOF' > gradle.properties
           org.gradle.jvmargs=-Xmx2048m
           android.useAndroidX=true
           EOF
 
-          # 4. APP/BUILD.GRADLE
           cat << 'EOF' > app/build.gradle
           plugins {
               id 'com.android.application'
@@ -96,7 +92,6 @@ jobs:
           }
           EOF
 
-          # 5. ANDROIDMANIFEST.XML
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -123,7 +118,6 @@ jobs:
           </manifest>
           EOF
 
-          # 6. KOTLIN MAINACTIVITY COMPLETO
           cat << 'EOF' > app/src/main/java/com/belmont/cosmos/MainActivity.kt
           package com.belmont.cosmos
 
@@ -306,7 +300,6 @@ jobs:
                       .setSmallIcon(android.R.drawable.ic_media_play)
                       .setContentTitle(title)
                       .setContentText("$artist • $album")
-                      .setSubtext("COSMOS • Belmont Edition")
                       .setOngoing(isPlaying)
                       .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                       .setColor(android.graphics.Color.parseColor("#9333ea"))
@@ -327,7 +320,6 @@ jobs:
           }
           EOF
 
-          # 7. INTERFAZ HTML COMPLETA Y BLINDADA
           cat << 'EOF' > app/src/main/assets/index.html
           <!DOCTYPE html>
           <html lang="es">
@@ -501,7 +493,7 @@ jobs:
             <script>
               const fallbackCoverSvg = "data:image/svg+xml;utf8," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300"><rect width="300" height="300" fill="#06020d"/><circle cx="150" cy="150" r="105" fill="none" stroke="#9333ea" stroke-width="2" opacity="0.4"/><path d="M85 138 A68 68 0 0 1 215 138" fill="none" stroke="#f0abfc" stroke-width="5" stroke-linecap="round"/><polygon points="150,65 92,165 122,165 150,110" fill="#ffffff"/><polygon points="150,65 208,165 178,165 150,110" fill="#c084fc"/><polygon points="128,160 150,225 172,160 150,180" fill="#e879f9"/><polygon points="150,126 160,146 150,166 140,146" fill="#ffffff"/></svg>`);
 
-              let tracks = [], customOverrides = JSON.parse(localStorage.getItem("cosmos_overrides_v6")) || {}, playlists = [];
+              let tracks = [], customOverrides = JSON.parse(localStorage.getItem("cosmos_overrides_v7")) || {}, playlists = [];
               let currentTab = "songs", currentTrackIndex = -1, isPlaying = false, shuffleMode = false, repeatMode = 0;
 
               window.onNativeLibraryLoaded = function(jsonArray) {
@@ -755,7 +747,7 @@ jobs:
                 const coverFile = document.getElementById("editCoverFile").files[0];
                 const save = () => {
                   customOverrides[t.id] = { title: t.title, artist: t.artist, album: t.album, cover: t.cover };
-                  localStorage.setItem("cosmos_overrides_v6", JSON.stringify(customOverrides));
+                  localStorage.setItem("cosmos_overrides_v7", JSON.stringify(customOverrides));
                   loadTrack(currentTrackIndex, isPlaying);
                 };
                 if(coverFile) {
