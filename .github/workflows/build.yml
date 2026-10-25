@@ -18,28 +18,30 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Instalar Android SDK Automatico
+      - name: Instalar Android SDK Unificado
         run: |
-          export ANDROID_SDK_ROOT=$HOME/android-sdk
-          mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
+          # Usar el directorio oficial por defecto de GitHub Actions para evitar conflictos
+          export ANDROID_HOME=/usr/local/lib/android/sdk
+          mkdir -p $ANDROID_HOME/cmdline-tools
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O tools.zip
-          unzip -q tools.zip -d $ANDROID_SDK_ROOT/cmdline-tools
-          mv $ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools $ANDROID_SDK_ROOT/cmdline-tools/latest
+          unzip -q tools.zip -d $ANDROID_HOME/cmdline-tools
+          mv $ANDROID_HOME/cmdline-tools/cmdline-tools $ANDROID_HOME/cmdline-tools/latest
           rm tools.zip
           
-          export PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools
+          export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
           yes | sdkmanager --licenses || true
           sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
           
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
-          echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
 
       - name: Crear Estructura Gradle y Archivos de COSMOS
         run: |
           mkdir -p app/src/main/java/com/belmont/cosmos
           mkdir -p app/src/main/assets
 
-          # 1. ARCHIVO SETTINGS.GRADLE
+          # 1. SETTINGS.GRADLE
           cat << 'EOF' > settings.gradle
           pluginManagement {
               repositories { google(); mavenCentral(); gradlePluginPortal() }
@@ -52,7 +54,7 @@ jobs:
           include ':app'
           EOF
 
-          # 2. ARCHIVO BUILD.GRADLE GLOBAL
+          # 2. BUILD.GRADLE GLOBAL
           cat << 'EOF' > build.gradle
           plugins {
               id 'com.android.application' version '8.2.2' apply false
@@ -66,7 +68,7 @@ jobs:
           android.useAndroidX=true
           EOF
 
-          # 4. ARCHIVO APP/BUILD.GRADLE
+          # 4. APP/BUILD.GRADLE
           cat << 'EOF' > app/build.gradle
           plugins {
               id 'com.android.application'
@@ -95,7 +97,7 @@ jobs:
           }
           EOF
 
-          # 5. ANDROIDMANIFEST.XML CON PERMISOS DE MEDIASTORE Y NOTIFICACIONES
+          # 5. ANDROIDMANIFEST.XML
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -122,7 +124,7 @@ jobs:
           </manifest>
           EOF
 
-          # 6. KOTLIN MAINACTIVITY (MOTOR NATIVO MEDIASTORE + NOTIFICACIONES)
+          # 6. KOTLIN MAINACTIVITY
           cat << 'EOF' > app/src/main/java/com/belmont/cosmos/MainActivity.kt
           package com.belmont.cosmos
 
@@ -323,7 +325,7 @@ jobs:
           }
           EOF
 
-          # 7. INTERFAZ HTML DE COSMOS
+          # 7. INTERFAZ HTML
           cat << 'EOF' > app/src/main/assets/index.html
           <!DOCTYPE html>
           <html lang="es">
