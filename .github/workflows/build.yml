@@ -35,7 +35,7 @@ jobs:
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
           echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
 
-      - name: Compilar COSMOS Master Edition Completa
+      - name: Ensamblar Motor Nativo y UI Maestra de COSMOS
         run: |
           mkdir -p app/src/main/java/com/belmont/cosmos
           mkdir -p app/src/main/assets
@@ -43,21 +43,83 @@ jobs:
           mkdir -p app/src/main/res/drawable
           mkdir -p app/src/main/res/mipmap-xxhdpi
 
+          # Copiar tus imagenes reales tanto a recursos nativos como a assets del WebView
           if [ -f "ic_launcher.png" ]; then
             cp ic_launcher.png app/src/main/res/drawable/ic_launcher.png
             cp ic_launcher.png app/src/main/res/mipmap-xxhdpi/ic_launcher.png
             cp ic_launcher.png app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png
+            cp ic_launcher.png app/src/main/assets/ic_launcher.png
+          elif [ -f "app/src/main/res/drawable/ic_launcher.png" ]; then
+            cp app/src/main/res/drawable/ic_launcher.png app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+            cp app/src/main/res/drawable/ic_launcher.png app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png
+            cp app/src/main/res/drawable/ic_launcher.png app/src/main/assets/ic_launcher.png
           fi
 
           if [ -f "splash_bg.png" ]; then
             cp splash_bg.png app/src/main/res/drawable/splash_bg.png
+            cp splash_bg.png app/src/main/assets/splash_bg.png
+          elif [ -f "app/src/main/res/drawable/splash_bg.png" ]; then
+            cp app/src/main/res/drawable/splash_bg.png app/src/main/assets/splash_bg.png
           fi
+
+          # ICONOS VECTORIALES MODERNOS ESTILO SPOTIFY PARA LA NOTIFICACION
+          cat << 'EOF' > app/src/main/res/drawable/ic_cosmos_notif.xml
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp"
+              android:height="24dp"
+              android:viewportWidth="100"
+              android:viewportHeight="100">
+              <path android:fillColor="#FFFFFF" android:pathData="M50,8 L16,62 L34,62 L50,32 L66,62 L84,62 Z"/>
+              <path android:fillColor="#FFFFFF" android:pathData="M36,58 L50,92 L64,58 L50,68 Z"/>
+              <path android:fillColor="#FFFFFF" android:pathData="M50,39 L56,50 L50,61 L44,50 Z"/>
+          </vector>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/drawable/ic_action_prev.xml
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="28dp"
+              android:height="28dp"
+              android:viewportWidth="24"
+              android:viewportHeight="24">
+              <path android:fillColor="#FFFFFF" android:pathData="M6,6c0.55,0 1,0.45 1,1v10c0,0.55 -0.45,1 -1,1s-1,-0.45 -1,-1V7C5,6.45 5.45,6 6,6zM9.5,12l8.5,6V6L9.5,12z"/>
+          </vector>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/drawable/ic_action_play.xml
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="32dp"
+              android:height="32dp"
+              android:viewportWidth="24"
+              android:viewportHeight="24">
+              <path android:fillColor="#FFFFFF" android:pathData="M8,6.82v10.36c0,0.79 0.87,1.27 1.54,0.84l8.14,-5.18c0.62,-0.39 0.62,-1.29 0,-1.69L9.54,5.98C8.87,5.55 8,6.03 8,6.82z"/>
+          </vector>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/drawable/ic_action_pause.xml
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="32dp"
+              android:height="32dp"
+              android:viewportWidth="24"
+              android:viewportHeight="24">
+              <path android:fillColor="#FFFFFF" android:pathData="M8,19c1.1,0 2,-0.9 2,-2V7c0,-1.1 -0.9,-2 -2,-2S6,5.9 6,7v10C6,18.1 6.9,19 8,19zM16,5c-1.1,0 -2,0.9 -2,2v10c0,1.1 0.9,2 2,2s2,-0.9 2,-2V7C18,5.9 17.1,5 16,5z"/>
+          </vector>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/drawable/ic_action_next.xml
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="28dp"
+              android:height="28dp"
+              android:viewportWidth="24"
+              android:viewportHeight="24">
+              <path android:fillColor="#FFFFFF" android:pathData="M18,6c-0.55,0 -1,0.45 -1,1v10c0,0.55 0.45,1 1,1s1,-0.45 1,-1V7C19,6.45 18.55,6 18,6zM14.5,12L6,6v12L14.5,12z"/>
+          </vector>
+          EOF
 
           cat << 'EOF' > app/src/main/res/values/styles.xml
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
               <style name="Theme.CosmosSplash" parent="android:Theme.DeviceDefault.NoActionBar">
-                  <item name="android:windowBackground">@drawable/splash_bg</item>
+                  <item name="android:windowBackground">#040109</item>
                   <item name="android:statusBarColor">#040109</item>
                   <item name="android:navigationBarColor">#040109</item>
               </style>
@@ -98,10 +160,10 @@ jobs:
               compileSdk 34
               defaultConfig {
                   applicationId "com.belmont.cosmos"
-                  minSdk 24
+                  minSdk 26
                   targetSdk 34
-                  versionCode 1
-                  versionName "1.0"
+                  versionCode 2
+                  versionName "2.0"
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
@@ -129,6 +191,7 @@ jobs:
                   android:icon="@mipmap/ic_launcher"
                   android:roundIcon="@mipmap/ic_launcher_round"
                   android:theme="@style/Theme.CosmosSplash"
+                  android:hardwareAccelerated="true"
                   android:usesCleartextTraffic="true">
                   <activity
                       android:name=".MainActivity"
@@ -143,10 +206,12 @@ jobs:
           </manifest>
           EOF
 
+          # KOTLIN MAINACTIVITY CON STREAMING RANGE 206 SIN LAG Y NOTIFICACION SPOTIFY/SUNO
           cat << 'EOF' > app/src/main/java/com/belmont/cosmos/MainActivity.kt
           package com.belmont.cosmos
 
           import android.Manifest
+          import android.app.Notification
           import android.app.NotificationChannel
           import android.app.NotificationManager
           import android.app.PendingIntent
@@ -156,29 +221,42 @@ jobs:
           import android.content.Intent
           import android.content.IntentFilter
           import android.content.pm.PackageManager
+          import android.graphics.Bitmap
+          import android.graphics.BitmapFactory
+          import android.graphics.Canvas
+          import android.graphics.Color
+          import android.graphics.LinearGradient
+          import android.graphics.Paint
+          import android.graphics.Shader
+          import android.graphics.drawable.Icon
+          import android.media.MediaMetadata
           import android.media.session.MediaSession
           import android.media.session.PlaybackState
           import android.net.Uri
           import android.os.Build
           import android.os.Bundle
           import android.provider.MediaStore
+          import android.view.View
           import android.webkit.JavascriptInterface
           import android.webkit.WebChromeClient
           import android.webkit.WebResourceRequest
           import android.webkit.WebResourceResponse
+          import android.webkit.WebSettings
           import android.webkit.WebView
           import android.webkit.WebViewClient
           import androidx.activity.ComponentActivity
           import androidx.core.app.ActivityCompat
-          import androidx.core.app.NotificationCompat
           import androidx.core.content.ContextCompat
           import org.json.JSONArray
           import org.json.JSONObject
+          import java.io.BufferedInputStream
+          import java.io.FileInputStream
 
           class MainActivity : ComponentActivity() {
               private lateinit var webView: WebView
               private var mediaSession: MediaSession? = null
-              private val CHANNEL_ID = "cosmos_playback_channel"
+              private val CHANNEL_ID = "cosmos_pro_media_channel"
+              private var fallbackCosmosArt: Bitmap? = null
 
               private val mediaActionReceiver = object : BroadcastReceiver() {
                   override fun onReceive(context: Context?, intent: Intent?) {
@@ -192,18 +270,22 @@ jobs:
 
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
-                  window.statusBarColor = android.graphics.Color.parseColor("#040109")
-                  window.navigationBarColor = android.graphics.Color.parseColor("#040109")
+                  window.statusBarColor = Color.parseColor("#040109")
+                  window.navigationBarColor = Color.parseColor("#040109")
+                  fallbackCosmosArt = createCosmosPurpleArtwork()
                   setupMediaSessionAndChannel()
 
                   webView = WebView(this)
+                  webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
                   setContentView(webView)
+
                   webView.settings.apply {
                       javaScriptEnabled = true
                       domStorageEnabled = true
                       mediaPlaybackRequiresUserGesture = false
                       allowFileAccess = true
                       allowContentAccess = true
+                      cacheMode = WebSettings.LOAD_DEFAULT
                   }
                   webView.webChromeClient = WebChromeClient()
                   webView.webViewClient = object : WebViewClient() {
@@ -212,17 +294,14 @@ jobs:
                           if (url.startsWith("https://cosmos.local/audio/")) {
                               val id = url.removePrefix("https://cosmos.local/audio/").toLongOrNull() ?: return null
                               val contentUri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
-                              return try {
-                                  val stream = contentResolver.openInputStream(contentUri)
-                                  WebResourceResponse("audio/mpeg", "UTF-8", 200, "OK", mapOf("Access-Control-Allow-Origin" to "*"), stream)
-                              } catch (e: Exception) { null }
+                              return serveAudioStreamWithRange(contentUri, request.requestHeaders)
                           }
                           if (url.startsWith("https://cosmos.local/albumart/")) {
                               val albumId = url.removePrefix("https://cosmos.local/albumart/").toLongOrNull() ?: return null
                               val artUri = ContentUris.withAppendedId(Uri.parse("content://media/external/audio/albumart"), albumId)
                               return try {
-                                  val stream = contentResolver.openInputStream(artUri)
-                                  WebResourceResponse("image/jpeg", "UTF-8", 200, "OK", mapOf("Access-Control-Allow-Origin" to "*"), stream)
+                                  val stream = contentResolver.openInputStream(artUri) ?: return null
+                                  WebResourceResponse("image/jpeg", "UTF-8", 200, "OK", mapOf("Access-Control-Allow-Origin" to "*"), BufferedInputStream(stream, 32768))
                               } catch (e: Exception) { null }
                           }
                           return super.shouldInterceptRequest(view, request)
@@ -232,20 +311,119 @@ jobs:
                   webView.loadUrl("file:///android_asset/index.html")
               }
 
-              private fun setupMediaSessionAndChannel() {
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                      val channel = NotificationChannel(CHANNEL_ID, "COSMOS Reproductor", NotificationManager.IMPORTANCE_LOW)
-                      getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+              // Streaming de alta velocidad con soporte HTTP 206 Range para eliminar lag de audio
+              private fun serveAudioStreamWithRange(uri: Uri, headers: Map<String, String>?): WebResourceResponse? {
+                  return try {
+                      val pfd = contentResolver.openFileDescriptor(uri, "r") ?: return null
+                      val totalLen = pfd.statSize
+                      val rangeHeader = headers?.entries?.firstOrNull { it.key.equals("Range", ignoreCase = true) }?.value
+
+                      val fis = FileInputStream(pfd.fileDescriptor)
+                      var start = 0L
+                      var end = if (totalLen > 0) totalLen - 1 else 0L
+                      var statusCode = 200
+                      var reason = "OK"
+
+                      if (rangeHeader != null && rangeHeader.startsWith("bytes=") && totalLen > 0) {
+                          val parts = rangeHeader.removePrefix("bytes=").split("-")
+                          start = parts[0].toLongOrNull() ?: 0L
+                          if (parts.size > 1 && parts[1].isNotEmpty()) {
+                              end = parts[1].toLongOrNull() ?: (totalLen - 1)
+                          }
+                          if (start > 0) fis.channel.position(start)
+                          statusCode = 206
+                          reason = "Partial Content"
+                      }
+
+                      val contentLen = if (totalLen > 0) (end - start + 1) else -1L
+                      val respHeaders = mutableMapOf(
+                          "Access-Control-Allow-Origin" to "*",
+                          "Accept-Ranges" to "bytes",
+                          "Cache-Control" to "no-cache"
+                      )
+                      if (totalLen > 0) {
+                          respHeaders["Content-Length"] = contentLen.toString()
+                          if (statusCode == 206) {
+                              respHeaders["Content-Range"] = "bytes $start-$end/$totalLen"
+                          }
+                      }
+
+                      val buffered = object : BufferedInputStream(fis, 65536) {
+                          override fun close() {
+                              super.close()
+                              try { pfd.close() } catch (_: Exception) {}
+                          }
+                      }
+                      WebResourceResponse("audio/mpeg", null, statusCode, reason, respHeaders, buffered)
+                  } catch (e: Exception) {
+                      null
                   }
-                  mediaSession = MediaSession(this, "CosmosBelmontSession").apply {
+              }
+
+              private fun createCosmosPurpleArtwork(): Bitmap {
+                  val size = 512
+                  val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+                  val canvas = Canvas(bmp)
+                  val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+                  paint.shader = LinearGradient(
+                      0f, 0f, size.toFloat(), size.toFloat(),
+                      intArrayOf(Color.parseColor("#3b0764"), Color.parseColor("#7e22ce"), Color.parseColor("#1e0536")),
+                      floatArrayOf(0f, 0.5f, 1f),
+                      Shader.TileMode.CLAMP
+                  )
+                  canvas.drawRect(0f, 0f, size.toFloat(), size.toFloat(), paint)
+
+                  try {
+                      assets.open("ic_launcher.png").use { stream ->
+                          val logo = BitmapFactory.decodeStream(stream)
+                          if (logo != null) {
+                              val scaled = Bitmap.createScaledBitmap(logo, 340, 340, true)
+                              canvas.drawBitmap(scaled, 86f, 86f, null)
+                          }
+                      }
+                  } catch (_: Exception) {}
+                  return bmp
+              }
+
+              private fun loadAlbumArtBitmap(albumId: Long): Bitmap {
+                  if (albumId >= 0) {
+                      try {
+                          val artUri = ContentUris.withAppendedId(Uri.parse("content://media/external/audio/albumart"), albumId)
+                          contentResolver.openInputStream(artUri)?.use { stream ->
+                              val decoded = BitmapFactory.decodeStream(stream)
+                              if (decoded != null) {
+                                  // Mezclar sutilmente con atmósfera morada de COSMOS para la notificación
+                                  val copy = decoded.copy(Bitmap.Config.ARGB_8888, true)
+                                  val c = Canvas(copy)
+                                  val p = Paint()
+                                  p.color = Color.argb(48, 126, 34, 206)
+                                  c.drawRect(0f, 0f, copy.width.toFloat(), copy.height.toFloat(), p)
+                                  return copy
+                              }
+                          }
+                      } catch (_: Exception) {}
+                  }
+                  return fallbackCosmosArt ?: Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
+              }
+
+              private fun setupMediaSessionAndChannel() {
+                  val channel = NotificationChannel(CHANNEL_ID, "COSMOS Audio Engine", NotificationManager.IMPORTANCE_LOW).apply {
+                      description = "Controles multimedia de COSMOS Belmont Edition"
+                      setShowBadge(false)
+                  }
+                  getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+
+                  mediaSession = MediaSession(this, "CosmosBelmontProSession").apply {
                       setCallback(object : MediaSession.Callback() {
                           override fun onPlay() { runOnUiThread { webView.evaluateJavascript("playAudio();", null) } }
                           override fun onPause() { runOnUiThread { webView.evaluateJavascript("pauseAudio();", null) } }
                           override fun onSkipToNext() { runOnUiThread { webView.evaluateJavascript("nextTrack();", null) } }
                           override fun onSkipToPrevious() { runOnUiThread { webView.evaluateJavascript("prevTrack();", null) } }
+                          override fun onSeekTo(pos: Long) { runOnUiThread { webView.evaluateJavascript("seekToMs($pos);", null) } }
                       })
                       isActive = true
                   }
+
                   val filter = IntentFilter().apply {
                       addAction("COSMOS_PREV"); addAction("COSMOS_TOGGLE"); addAction("COSMOS_NEXT")
                   }
@@ -280,21 +458,38 @@ jobs:
               private fun scanDeviceMusic() {
                   Thread {
                       val arr = JSONArray()
-                      val projection = arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.TITLE, MediaStore.Audio.Media.ARTIST, MediaStore.Audio.Media.ALBUM, MediaStore.Audio.Media.ALBUM_ID)
-                      contentResolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, projection, "${MediaStore.Audio.Media.IS_MUSIC} != 0", null, "${MediaStore.Audio.Media.DATE_ADDED} DESC")?.use { cursor ->
+                      val projection = arrayOf(
+                          MediaStore.Audio.Media._ID,
+                          MediaStore.Audio.Media.TITLE,
+                          MediaStore.Audio.Media.ARTIST,
+                          MediaStore.Audio.Media.ALBUM,
+                          MediaStore.Audio.Media.ALBUM_ID,
+                          MediaStore.Audio.Media.DURATION
+                      )
+                      contentResolver.query(
+                          MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                          projection,
+                          "${MediaStore.Audio.Media.IS_MUSIC} != 0",
+                          null,
+                          "${MediaStore.Audio.Media.DATE_ADDED} DESC"
+                      )?.use { cursor ->
                           val idCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
                           val titleCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
                           val artistCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
                           val albumCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
                           val albumIdCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID)
+                          val durCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
                           while (cursor.moveToNext()) {
                               val id = cursor.getLong(idCol)
                               val albumId = cursor.getLong(albumIdCol)
+                              val durationMs = cursor.getLong(durCol)
                               arr.put(JSONObject().apply {
                                   put("id", "ms_$id")
                                   put("title", cursor.getString(titleCol) ?: "Pista")
                                   put("artist", cursor.getString(artistCol) ?: "Edward Belmont")
-                                  put("album", cursor.getString(albumCol) ?: "Cosmos")
+                                  put("album", cursor.getString(albumCol) ?: "COSMOS")
+                                  put("albumId", albumId)
+                                  put("durationMs", durationMs)
                                   put("audioUrl", "https://cosmos.local/audio/$id")
                                   put("cover", "https://cosmos.local/albumart/$albumId")
                               })
@@ -307,32 +502,68 @@ jobs:
 
               inner class CosmosBridge {
                   @JavascriptInterface fun rescanMediaStore() { runOnUiThread { checkPermissionsAndScan() } }
-                  @JavascriptInterface fun updateNotification(title: String, artist: String, album: String, isPlaying: Boolean) {
-                      runOnUiThread { showMediaNotification(title, artist, album, isPlaying) }
+                  @JavascriptInterface fun updateNotification(title: String, artist: String, album: String, albumId: Long, durationMs: Long, positionMs: Long, isPlaying: Boolean) {
+                      Thread {
+                          val artBitmap = loadAlbumArtBitmap(albumId)
+                          runOnUiThread { showMediaNotification(title, artist, album, artBitmap, durationMs, positionMs, isPlaying) }
+                      }.start()
                   }
               }
 
-              private fun showMediaNotification(title: String, artist: String, album: String, isPlaying: Boolean) {
+              private fun showMediaNotification(title: String, artist: String, album: String, artBitmap: Bitmap, durationMs: Long, positionMs: Long, isPlaying: Boolean) {
                   val state = if (isPlaying) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED
-                  mediaSession?.setPlaybackState(PlaybackState.Builder().setActions(PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or PlaybackState.ACTION_SKIP_TO_NEXT or PlaybackState.ACTION_SKIP_TO_PREVIOUS).setState(state, PlaybackState.PLAYBACK_POSITION_UNKNOWN, 1.0f).build())
+                  val actions = PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or PlaybackState.ACTION_SKIP_TO_NEXT or PlaybackState.ACTION_SKIP_TO_PREVIOUS or PlaybackState.ACTION_SEEK_TO
 
+                  mediaSession?.setPlaybackState(
+                      PlaybackState.Builder()
+                          .setActions(actions)
+                          .setState(state, positionMs, if (isPlaying) 1.0f else 0f)
+                          .build()
+                  )
+
+                  val metadata = MediaMetadata.Builder()
+                      .putString(MediaMetadata.METADATA_KEY_TITLE, title)
+                      .putString(MediaMetadata.METADATA_KEY_ARTIST, "$artist • $album")
+                      .putString(MediaMetadata.METADATA_KEY_ALBUM, "COSMOS • Belmont Edition")
+                      .putLong(MediaMetadata.METADATA_KEY_DURATION, if (durationMs > 0) durationMs else -1L)
+                      .putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, artBitmap)
+                      .putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, artBitmap)
+                      .build()
+                  mediaSession?.setMetadata(metadata)
+
+                  val openAppIntent = Intent(this, MainActivity::class.java).apply {
+                      flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+                  }
+                  val contentPending = PendingIntent.getActivity(this, 0, openAppIntent, PendingIntent.FLAG_IMMUTABLE)
                   val prevPending = PendingIntent.getBroadcast(this, 1, Intent("COSMOS_PREV"), PendingIntent.FLAG_IMMUTABLE)
                   val togglePending = PendingIntent.getBroadcast(this, 2, Intent("COSMOS_TOGGLE"), PendingIntent.FLAG_IMMUTABLE)
                   val nextPending = PendingIntent.getBroadcast(this, 3, Intent("COSMOS_NEXT"), PendingIntent.FLAG_IMMUTABLE)
-                  val playPauseIcon = if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
 
-                  val builder = NotificationCompat.Builder(this, CHANNEL_ID)
-                      .setSmallIcon(android.R.drawable.ic_media_play)
+                  val playPauseIcon = if (isPlaying) R.drawable.ic_action_pause else R.drawable.ic_action_play
+
+                  val prevAction = Notification.Action.Builder(Icon.createWithResource(this, R.drawable.ic_action_prev), "Anterior", prevPending).build()
+                  val playAction = Notification.Action.Builder(Icon.createWithResource(this, playPauseIcon), if (isPlaying) "Pausa" else "Play", togglePending).build()
+                  val nextAction = Notification.Action.Builder(Icon.createWithResource(this, R.drawable.ic_action_next), "Siguiente", nextPending).build()
+
+                  val mediaStyle = Notification.MediaStyle()
+                      .setMediaSession(mediaSession?.sessionToken)
+                      .setShowActionsInCompactView(0, 1, 2)
+
+                  val builder = Notification.Builder(this, CHANNEL_ID)
+                      .setSmallIcon(R.drawable.ic_cosmos_notif)
+                      .setLargeIcon(artBitmap)
                       .setContentTitle(title)
                       .setContentText("$artist • $album")
+                      .setSubText("COSMOS")
+                      .setContentIntent(contentPending)
                       .setOngoing(isPlaying)
-                      .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                      .setColor(android.graphics.Color.parseColor("#9333ea"))
+                      .setVisibility(Notification.VISIBILITY_PUBLIC)
+                      .setColor(Color.parseColor("#6b21a8"))
                       .setColorized(true)
-                      .addAction(android.R.drawable.ic_media_previous, "Anterior", prevPending)
-                      .addAction(playPauseIcon, if (isPlaying) "Pausa" else "Play", togglePending)
-                      .addAction(android.R.drawable.ic_media_next, "Siguiente", nextPending)
-                      .setStyle(androidx.media.app.NotificationCompat.MediaStyle().setShowActionsInCompactView(0, 1, 2))
+                      .addAction(prevAction)
+                      .addAction(playAction)
+                      .addAction(nextAction)
+                      .setStyle(mediaStyle)
 
                   getSystemService(NotificationManager::class.java).notify(777, builder.build())
               }
@@ -345,6 +576,7 @@ jobs:
           }
           EOF
 
+          # INTERFAZ HTML MAESTRA REESTRUCTURADA (SPLASH ANIMADO, TEXTURA COSMICA, PORTADAS CUADRADAS, METRONOMO BPM Y DSP SIN LAG)
           cat << 'EOF' > app/src/main/assets/index.html
           <!DOCTYPE html>
           <html lang="es">
@@ -356,179 +588,427 @@ jobs:
             <script src="https://cdn.tailwindcss.com"></script>
             <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
             <style>
-              @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Montserrat:wght@200;300;400;600&family=Inter:wght@300;400;500;600;700&display=swap');
-              :root { --bg-void: #040109; --neon-purple: #c084fc; --neon-pink: #e879f9; }
-              body { background-color: var(--bg-void); color: #f3e8ff; font-family: 'Inter', sans-serif; overflow-x: hidden; user-select: none; -webkit-tap-highlight-color: transparent; }
-              .digital-cosmos { font-family: 'Share Tech Mono', monospace; letter-spacing: 0.28em; text-shadow: 0 0 14px rgba(217, 70, 239, 0.85), 0 0 26px rgba(147, 51, 234, 0.6); }
-              .belmont-thin { font-family: 'Montserrat', sans-serif; font-weight: 200; letter-spacing: 0.36em; }
-              .cosmos-bg { background: radial-gradient(circle at 50% -10%, rgba(168, 85, 247, 0.32) 0%, transparent 55%), radial-gradient(circle at 85% 60%, rgba(217, 70, 239, 0.14) 0%, transparent 45%), linear-gradient(180deg, #080312 0%, #040109 100%); }
-              .glass-card { background: rgba(17, 8, 32, 0.88); backdrop-filter: blur(20px); border: 1px solid rgba(192, 132, 252, 0.24); box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4); }
-              .neon-chord-box { background: linear-gradient(160deg, rgba(107, 33, 168, 0.65) 0%, rgba(12, 5, 23, 0.98) 100%); border: 1.5px solid #e879f9; box-shadow: 0 0 28px rgba(217, 70, 239, 0.45), inset 0 0 14px rgba(192, 132, 252, 0.3); }
-              input[type="range"] { -webkit-appearance: none; appearance: none; background: #23113b; height: 4px; border-radius: 999px; outline: none; }
-              input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #f5d0fe; box-shadow: 0 0 14px #d946ef; cursor: pointer; }
+              @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Montserrat:wght@200;300;400;600;700&family=Inter:wght@300;400;500;600;700&display=swap');
+
+              :root {
+                --bg-void: #040109;
+                --neon-purple: #c084fc;
+                --neon-pink: #e879f9;
+              }
+
+              body {
+                background-color: var(--bg-void);
+                color: #f3e8ff;
+                font-family: 'Inter', sans-serif;
+                overflow-x: hidden;
+                user-select: none;
+                -webkit-tap-highlight-color: transparent;
+              }
+
+              /* TEXTURA DE FONDO MULTICAPA COSMICA + MALLA SUTIL */
+              .cosmos-bg {
+                background-color: #040109;
+                background-image:
+                  radial-gradient(circle at 50% -5%, rgba(168, 85, 247, 0.36) 0%, transparent 55%),
+                  radial-gradient(circle at 90% 45%, rgba(217, 70, 239, 0.16) 0%, transparent 45%),
+                  radial-gradient(circle at 10% 80%, rgba(126, 34, 206, 0.22) 0%, transparent 50%),
+                  linear-gradient(rgba(192, 132, 252, 0.03) 1px, transparent 1px),
+                  linear-gradient(90deg, rgba(192, 132, 252, 0.03) 1px, transparent 1px),
+                  radial-gradient(rgba(255, 255, 255, 0.10) 1px, transparent 0);
+                background-size: 100% 100%, 100% 100%, 100% 100%, 28px 28px, 28px 28px, 90px 90px;
+                background-position: 0 0, 0 0, 0 0, 0 0, 0 0, 15px 25px;
+              }
+
+              .digital-cosmos {
+                font-family: 'Share Tech Mono', monospace;
+                letter-spacing: 0.28em;
+                text-shadow: 0 0 14px rgba(217, 70, 239, 0.85), 0 0 26px rgba(147, 51, 234, 0.6);
+              }
+
+              .belmont-thin {
+                font-family: 'Montserrat', sans-serif;
+                font-weight: 300;
+                letter-spacing: 0.36em;
+              }
+
+              .glass-card {
+                background: rgba(15, 6, 28, 0.90);
+                border: 1px solid rgba(192, 132, 252, 0.24);
+                box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
+              }
+
+              .neon-chord-box {
+                background: linear-gradient(160deg, rgba(107, 33, 168, 0.72) 0%, rgba(10, 4, 20, 0.98) 100%);
+                border: 1.5px solid #e879f9;
+                box-shadow: 0 0 25px rgba(217, 70, 239, 0.45), inset 0 0 12px rgba(192, 132, 252, 0.3);
+              }
+
+              /* PORTADAS CUADRADAS SIN BORDES REDONDOS CON MARCO FINO */
+              .sharp-cover {
+                border-radius: 0px !important;
+                border: 1px solid rgba(216, 180, 254, 0.35);
+                box-shadow: 0 12px 35px rgba(0, 0, 0, 0.75), 0 0 18px rgba(168, 85, 247, 0.22);
+              }
+
+              /* ANIMACIONES DEL SPLASH SCREEN DE BIENVENIDA */
+              @keyframes letterGlow {
+                0% { opacity: 0.1; text-shadow: none; transform: translateY(6px) scale(0.95); }
+                50% { opacity: 1; color: #ffffff; text-shadow: 0 0 20px #e879f9, 0 0 38px #a855f7; transform: translateY(0) scale(1.04); }
+                100% { opacity: 1; color: #f3e8ff; text-shadow: 0 0 12px #d946ef, 0 0 24px #7e22ce; transform: translateY(0) scale(1); }
+              }
+
+              @keyframes pulseAura {
+                0%, 100% { filter: drop-shadow(0 0 16px rgba(217, 70, 239, 0.6)); transform: scale(1); }
+                50% { filter: drop-shadow(0 0 32px rgba(232, 121, 249, 0.95)); transform: scale(1.04); }
+              }
+
+              .splash-letter {
+                display: inline-block;
+                opacity: 0.1;
+                animation: letterGlow 0.9s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+              }
+
+              .logo-aura {
+                animation: pulseAura 2.4s ease-in-out infinite;
+              }
+
+              .chroma-bar-gpu {
+                transform-origin: bottom;
+                will-change: transform, opacity;
+                transition: transform 60ms linear;
+              }
+
+              input[type="range"] {
+                -webkit-appearance: none;
+                appearance: none;
+                background: #23113b;
+                height: 4px;
+                border-radius: 0px;
+                outline: none;
+              }
+              input[type="range"]::-webkit-slider-thumb {
+                -webkit-appearance: none;
+                appearance: none;
+                width: 14px;
+                height: 14px;
+                border-radius: 0px;
+                background: #f5d0fe;
+                border: 1px solid #d946ef;
+                box-shadow: 0 0 12px #d946ef;
+                cursor: pointer;
+              }
+
               .no-scrollbar::-webkit-scrollbar { display: none; }
             </style>
           </head>
           <body class="cosmos-bg min-h-screen flex flex-col justify-between pb-40">
-            <svg class="hidden">
-              <defs>
-                <linearGradient id="crestLeft" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#ffffff" /><stop offset="45%" stop-color="#f0abfc" /><stop offset="100%" stop-color="#9333ea" /></linearGradient>
-                <linearGradient id="crestRight" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#e9d5ff" /><stop offset="50%" stop-color="#a855f7" /><stop offset="100%" stop-color="#4c1d95" /></linearGradient>
-                <g id="cosmosMasterLogo">
-                  <circle cx="50" cy="50" r="45" fill="none" stroke="#e879f9" stroke-width="1.8" opacity="0.5" />
-                  <path d="M 14 44 A 36 36 0 0 1 86 44" fill="none" stroke="url(#crestLeft)" stroke-width="3" stroke-linecap="round" opacity="0.95" />
-                  <polygon points="50,8 16,62 34,62 50,32" fill="url(#crestLeft)" />
-                  <polygon points="50,8 84,62 66,62 50,32" fill="url(#crestRight)" />
-                  <polygon points="36,58 50,92 64,58 50,68" fill="url(#crestLeft)" />
-                  <polygon points="50,39 56,50 50,61 44,50" fill="#ffffff" />
-                </g>
-              </defs>
-            </svg>
 
-            <header class="sticky top-0 z-30 glass-card px-4 py-3 flex items-center justify-between border-b border-purple-800/40">
+            <!-- PANTALLA DE BIENVENIDA ANIMADA (SPLASH SCREEN INTERACTIVO) -->
+            <div id="welcomeSplash" class="fixed inset-0 z-[100] bg-[#040109] flex flex-col items-center justify-center overflow-hidden transition-opacity duration-700">
+              <img src="splash_bg.png" onerror="this.style.display='none'" class="absolute inset-0 w-full h-full object-cover opacity-35 pointer-events-none" />
+              <div class="relative z-10 flex flex-col items-center px-6">
+                <div class="w-32 h-32 mb-6 flex items-center justify-center logo-aura">
+                  <img src="ic_launcher.png" onerror="this.src=window.defaultLogoDataUri" class="w-full h-full object-contain" />
+                </div>
+                <div class="digital-cosmos text-3xl sm:text-4xl font-bold tracking-[0.35em] flex space-x-2">
+                  <span class="splash-letter" style="animation-delay: 0.10s">C</span>
+                  <span class="splash-letter" style="animation-delay: 0.22s">O</span>
+                  <span class="splash-letter" style="animation-delay: 0.34s">S</span>
+                  <span class="splash-letter" style="animation-delay: 0.46s">M</span>
+                  <span class="splash-letter" style="animation-delay: 0.58s">O</span>
+                  <span class="splash-letter" style="animation-delay: 0.70s">S</span>
+                </div>
+                <p class="belmont-thin text-[10px] text-fuchsia-300/90 uppercase mt-3 tracking-[0.45em] splash-letter" style="animation-delay: 0.90s">
+                  Belmont Edition
+                </p>
+                <div class="w-48 h-[2px] bg-purple-950 mt-8 overflow-hidden">
+                  <div id="splashBar" class="h-full bg-gradient-to-r from-purple-600 via-fuchsia-400 to-white transition-all duration-1000" style="width: 15%"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- HEADER CON TU LOGO REAL -->
+            <header class="sticky top-0 z-30 glass-card px-4 py-3 flex items-center justify-between border-b border-purple-700/40">
               <div class="flex items-center gap-3">
-                <div class="w-11 h-11 rounded-2xl bg-gradient-to-br from-purple-900/90 to-purple-950 border border-fuchsia-500/50 flex items-center justify-center shadow-[0_0_20px_rgba(217,70,239,0.35)]">
-                  <svg class="w-9 h-9" viewBox="0 0 100 100"><use href="#cosmosMasterLogo" /></svg>
+                <div class="w-11 h-11 bg-[#090314] border border-fuchsia-500/60 flex items-center justify-center shadow-[0_0_18px_rgba(217,70,239,0.4)] overflow-hidden">
+                  <img id="headerLogoImg" src="ic_launcher.png" class="w-full h-full object-cover" />
                 </div>
                 <div>
-                  <h1 class="digital-cosmos text-lg font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-100 via-fuchsia-200 to-purple-400 leading-none">COSMOS</h1>
-                  <p class="belmont-thin text-[7.5px] text-fuchsia-300 uppercase tracking-[0.3em] mt-1">Belmont Edition</p>
+                  <h1 class="digital-cosmos text-lg font-bold text-transparent bg-clip-text bg-gradient-to-r from-white via-fuchsia-200 to-purple-400 leading-none">COSMOS</h1>
+                  <p class="belmont-thin text-[7.5px] text-fuchsia-300 uppercase tracking-[0.32em] mt-1">Belmont Edition</p>
                 </div>
               </div>
               <div class="flex items-center gap-2">
-                <button onclick="openModal('timerModal')" class="px-2.5 py-1.5 rounded-xl bg-purple-950/80 border border-purple-600/40 text-xs text-purple-200 flex items-center gap-1.5 shadow-inner"><i class="fa-regular fa-clock text-fuchsia-400 text-[11px]"></i><span id="timerText" class="text-[10px] font-mono">Off</span></button>
-                <button onclick="openModal('eqModal')" class="w-9 h-9 rounded-xl bg-purple-950/80 border border-purple-600/40 text-purple-200 flex items-center justify-center shadow-inner"><i class="fa-solid fa-sliders text-xs"></i></button>
-                <button onclick="rescanPhoneLibrary()" class="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-purple-700 via-purple-600 to-fuchsia-600 text-white text-xs font-semibold flex items-center gap-1.5 shadow-lg active:scale-95 border border-fuchsia-400/30"><i class="fa-solid fa-rotate"></i> Escanear</button>
+                <button onclick="openModal('timerModal')" class="px-2.5 py-1.5 bg-purple-950/80 border border-purple-600/40 text-xs text-purple-200 flex items-center gap-1.5">
+                  <i class="fa-regular fa-clock text-fuchsia-400 text-[11px]"></i>
+                  <span id="timerText" class="text-[10px] font-mono">Off</span>
+                </button>
+                <button onclick="openModal('eqModal')" class="w-9 h-9 bg-purple-950/80 border border-purple-600/40 text-purple-200 flex items-center justify-center">
+                  <i class="fa-solid fa-sliders text-xs"></i>
+                </button>
+                <button onclick="rescanPhoneLibrary()" class="px-3.5 py-1.5 bg-gradient-to-r from-purple-700 via-purple-600 to-fuchsia-600 text-white text-xs font-semibold flex items-center gap-1.5 shadow-lg active:scale-95 border border-fuchsia-400/40">
+                  <i class="fa-solid fa-rotate"></i> Escanear
+                </button>
               </div>
             </header>
 
-            <div class="px-4 pt-3.5"><div class="relative"><i class="fa-solid fa-magnifying-glass absolute left-3.5 top-3 text-fuchsia-400/60 text-xs"></i><input type="text" id="searchInput" oninput="renderLibrary()" placeholder="Buscar canción, artista o álbum..." class="w-full pl-9 pr-4 py-2.5 rounded-xl bg-purple-950/45 border border-purple-700/35 text-xs sm:text-sm text-purple-100 placeholder-purple-300/40 focus:outline-none focus:border-fuchsia-400 shadow-inner" /></div></div>
+            <!-- BUSCADOR -->
+            <div class="px-4 pt-3.5">
+              <div class="relative">
+                <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-3 text-fuchsia-400/60 text-xs"></i>
+                <input type="text" id="searchInput" oninput="renderLibrary()" placeholder="Buscar canción, artista o álbum..." class="w-full pl-9 pr-4 py-2.5 bg-purple-950/50 border border-purple-700/40 text-xs sm:text-sm text-purple-100 placeholder-purple-300/40 focus:outline-none focus:border-fuchsia-400" />
+              </div>
+            </div>
 
+            <!-- NAVEGADOR DE PESTAÑAS -->
             <nav class="flex gap-2 px-4 py-3 overflow-x-auto no-scrollbar">
-              <button onclick="switchTab('songs')" id="tab-songs" class="px-4 py-1.5 rounded-xl text-xs font-medium bg-gradient-to-r from-purple-700 to-fuchsia-600 text-white shadow-md shadow-purple-900/50 border border-fuchsia-400/30 whitespace-nowrap">Canciones (<span id="countSongs">0</span>)</button>
-              <button onclick="switchTab('artists')" id="tab-artists" class="px-4 py-1.5 rounded-xl text-xs font-medium bg-purple-950/50 text-purple-300/80 border border-purple-800/40 whitespace-nowrap">Artistas</button>
-              <button onclick="switchTab('albums')" id="tab-albums" class="px-4 py-1.5 rounded-xl text-xs font-medium bg-purple-950/50 text-purple-300/80 border border-purple-800/40 whitespace-nowrap">Álbumes</button>
-              <button onclick="switchTab('playlists')" id="tab-playlists" class="px-4 py-1.5 rounded-xl text-xs font-medium bg-purple-950/50 text-purple-300/80 border border-purple-800/40 whitespace-nowrap">Playlists</button>
+              <button onclick="switchTab('songs')" id="tab-songs" class="px-4 py-1.5 text-xs font-semibold bg-gradient-to-r from-purple-700 to-fuchsia-600 text-white border border-fuchsia-400/40 whitespace-nowrap">Canciones (<span id="countSongs">0</span>)</button>
+              <button onclick="switchTab('artists')" id="tab-artists" class="px-4 py-1.5 text-xs font-medium bg-purple-950/60 text-purple-300/80 border border-purple-800/40 whitespace-nowrap">Artistas</button>
+              <button onclick="switchTab('albums')" id="tab-albums" class="px-4 py-1.5 text-xs font-medium bg-purple-950/60 text-purple-300/80 border border-purple-800/40 whitespace-nowrap">Álbumes</button>
+              <button onclick="switchTab('playlists')" id="tab-playlists" class="px-4 py-1.5 text-xs font-medium bg-purple-950/60 text-purple-300/80 border border-purple-800/40 whitespace-nowrap">Playlists</button>
             </nav>
 
+            <!-- LISTA DE BIBLIOTECA -->
             <main id="libraryContainer" class="px-4 flex-1 space-y-2 overflow-y-auto"></main>
 
-            <footer class="mt-6 mb-2 text-center pointer-events-none"><p class="belmont-thin text-[8px] uppercase text-purple-300 opacity-25">Desarrollado por Edward Belmont</p></footer>
+            <footer class="mt-6 mb-2 text-center pointer-events-none">
+              <p class="belmont-thin text-[8px] uppercase text-purple-300 opacity-30">Desarrollado por Edward Belmont</p>
+            </footer>
 
+            <!-- MINI REPRODUCTOR INFERIOR CON PORTADA CUADRADA -->
             <div class="fixed bottom-0 left-0 right-0 z-40 p-2 bg-gradient-to-t from-[#040109] via-[#040109]/95 to-transparent">
-              <div class="glass-card rounded-2xl p-3 shadow-2xl border border-purple-500/30">
+              <div class="glass-card p-3 border border-purple-500/35">
                 <div class="flex items-center justify-between gap-3">
                   <div class="flex items-center gap-3 flex-1 min-w-0 cursor-pointer" onclick="openModal('playerModal')">
-                    <img id="miniCover" src="" class="w-12 h-12 rounded-xl object-cover border border-purple-400/35 bg-purple-950/60 shrink-0" />
+                    <img id="miniCover" src="" class="w-14 h-14 sharp-cover object-cover bg-purple-950/60 shrink-0" />
                     <div class="min-w-0 flex-1">
-                      <div class="flex items-center gap-2"><h3 id="miniTitle" class="font-semibold text-sm text-white truncate">Cargando biblioteca...</h3><span id="miniChordBadge" class="px-2 py-0.5 text-[11px] font-bold rounded bg-fuchsia-700/90 text-white border border-fuchsia-300/60 font-mono shrink-0 shadow">--</span></div>
-                      <p id="miniArtist" class="text-xs text-purple-300/70 truncate">COSMOS Native Engine</p>
+                      <div class="flex items-center gap-1.5">
+                        <h3 id="miniTitle" class="font-semibold text-sm text-white truncate">Cargando biblioteca...</h3>
+                        <span id="miniChordBadge" class="px-1.5 py-0.5 text-[10px] font-bold bg-fuchsia-700 text-white border border-fuchsia-300/60 font-mono shrink-0">--</span>
+                        <span id="miniBpmBadge" class="px-1.5 py-0.5 text-[10px] font-bold bg-purple-900 text-fuchsia-200 border border-purple-500/50 font-mono shrink-0">-- BPM</span>
+                      </div>
+                      <p id="miniArtist" class="text-xs text-purple-300/75 truncate mt-0.5">COSMOS Audio Engine</p>
                     </div>
                   </div>
                   <div class="flex items-center gap-1.5">
-                    <button onclick="prevTrack()" class="w-8 h-8 rounded-full flex items-center justify-center text-purple-200"><i class="fa-solid fa-backward-step"></i></button>
-                    <button onclick="togglePlay()" id="miniPlayBtn" class="w-10 h-10 rounded-full bg-gradient-to-tr from-purple-600 to-fuchsia-500 text-white flex items-center justify-center shadow-md"><i class="fa-solid fa-play text-sm"></i></button>
-                    <button onclick="nextTrack()" class="w-8 h-8 rounded-full flex items-center justify-center text-purple-200"><i class="fa-solid fa-forward-step"></i></button>
-                    <button onclick="openModal('playerModal')" class="w-8 h-8 rounded-full bg-purple-950/80 text-purple-300 flex items-center justify-center"><i class="fa-solid fa-chevron-up text-xs"></i></button>
+                    <button onclick="prevTrack()" class="w-8 h-8 flex items-center justify-center text-purple-200"><i class="fa-solid fa-backward-step"></i></button>
+                    <button onclick="togglePlay()" id="miniPlayBtn" class="w-11 h-11 bg-gradient-to-tr from-purple-600 to-fuchsia-500 text-white flex items-center justify-center shadow-md border border-fuchsia-300/40"><i class="fa-solid fa-play text-sm"></i></button>
+                    <button onclick="nextTrack()" class="w-8 h-8 flex items-center justify-center text-purple-200"><i class="fa-solid fa-forward-step"></i></button>
+                    <button onclick="openModal('playerModal')" class="w-8 h-8 bg-purple-950/80 text-purple-300 flex items-center justify-center border border-purple-700/40"><i class="fa-solid fa-chevron-up text-xs"></i></button>
                   </div>
                 </div>
-                <div class="mt-2 flex items-center gap-2"><span id="miniCurrentTime" class="text-[10px] text-purple-300/70 w-8 font-mono">0:00</span><input type="range" id="miniSeek" value="0" min="0" max="100" step="0.1" oninput="seekAudio(this.value)" class="flex-1" /><span id="miniDuration" class="text-[10px] text-purple-300/70 w-8 text-right font-mono">0:00</span></div>
+                <div class="mt-2.5 flex items-center gap-2">
+                  <span id="miniCurrentTime" class="text-[10px] text-purple-300/70 w-8 font-mono">0:00</span>
+                  <input type="range" id="miniSeek" value="0" min="0" max="100" step="0.1" oninput="seekAudio(this.value)" class="flex-1" />
+                  <span id="miniDuration" class="text-[10px] text-purple-300/70 w-8 text-right font-mono">0:00</span>
+                </div>
               </div>
             </div>
 
-            <div id="playerModal" class="fixed inset-0 z-50 bg-[#040109]/98 backdrop-blur-2xl hidden flex-col justify-between p-4 sm:p-6 overflow-y-auto">
+            <!-- MODAL REPRODUCTOR COMPLETO (PORTADA CUADRADA GRANDE + ACORDES + METRONOMO BPM) -->
+            <div id="playerModal" class="fixed inset-0 z-50 cosmos-bg hidden flex-col justify-between p-4 sm:p-6 overflow-y-auto">
               <div class="flex items-center justify-between">
-                <button onclick="closeModal('playerModal')" class="w-9 h-9 rounded-xl bg-purple-950/80 border border-purple-800/40 text-purple-200 flex items-center justify-center"><i class="fa-solid fa-chevron-down text-sm"></i></button>
-                <div class="text-center"><span class="digital-cosmos text-[10px] uppercase text-fuchsia-300 block">COSMOS</span><span id="fullAlbumName" class="text-xs font-medium text-purple-200 truncate max-w-[200px] block">Álbum</span></div>
-                <button onclick="openEditModal()" class="px-3 py-1.5 rounded-xl bg-purple-950/80 border border-purple-600/40 text-xs text-purple-200 flex items-center gap-1.5"><i class="fa-solid fa-pen text-[10px]"></i> Editar</button>
+                <button onclick="closeModal('playerModal')" class="w-9 h-9 bg-purple-950/80 border border-purple-700/50 text-purple-200 flex items-center justify-center"><i class="fa-solid fa-chevron-down text-sm"></i></button>
+                <div class="text-center">
+                  <span class="digital-cosmos text-[10px] uppercase text-fuchsia-300 block">COSMOS</span>
+                  <span id="fullAlbumName" class="text-xs font-medium text-purple-200 truncate max-w-[220px] block">Álbum</span>
+                </div>
+                <button onclick="openEditModal()" class="px-3 py-1.5 bg-purple-950/80 border border-purple-600/50 text-xs text-purple-200 flex items-center gap-1.5"><i class="fa-solid fa-pen text-[10px]"></i> Editar</button>
               </div>
-              <div class="flex-1 flex flex-col items-center justify-center space-y-4 my-2">
-                <img id="fullCover" src="" class="w-52 h-52 sm:w-60 sm:h-60 rounded-2xl object-cover shadow-2xl border border-purple-400/35 bg-purple-950/40" />
-                <div class="w-full max-w-md glass-card rounded-2xl p-3.5 border border-purple-500/35">
-                  <div class="flex items-center justify-between mb-2">
-                    <div class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full bg-fuchsia-400 animate-pulse"></span><span class="text-[10px] font-semibold uppercase tracking-wider text-purple-200">Reconocedor de Acordes Digital</span></div>
-                    <button onclick="toggleChordMode()" id="chordModeBtn" class="px-2.5 py-0.5 rounded-lg bg-purple-900/90 border border-fuchsia-400/40 text-[10px] text-purple-100 font-medium">Power / Tónica</button>
+
+              <div class="flex-1 flex flex-col items-center justify-center space-y-3.5 my-2">
+                <!-- PORTADA GRANDE SIN BORDES REDONDOS -->
+                <img id="fullCover" src="" class="w-64 h-64 sm:w-72 sm:h-72 sharp-cover object-cover bg-purple-950/40" />
+
+                <!-- PANEL DSP: RECONOCEDOR DE ACORDES DE GUITARRA + METRONOMO EN TIEMPO REAL -->
+                <div class="w-full max-w-md glass-card p-3.5 border border-purple-500/40 space-y-3">
+                  <!-- SECCION ACORDES -->
+                  <div>
+                    <div class="flex items-center justify-between mb-1.5">
+                      <div class="flex items-center gap-2">
+                        <span class="w-2 h-2 bg-fuchsia-400 animate-pulse"></span>
+                        <span class="text-[10px] font-semibold uppercase tracking-wider text-purple-200">Detector de Acordes (Guitarra)</span>
+                      </div>
+                      <button onclick="toggleChordMode()" id="chordModeBtn" class="px-2.5 py-0.5 bg-purple-900/90 border border-fuchsia-400/50 text-[10px] text-purple-100 font-medium">Tríadas (m/Maj)</button>
+                    </div>
+                    <div class="w-full bg-black/60 h-1 overflow-hidden mb-2.5 border border-purple-900/40">
+                      <div id="measureLockBar" class="bg-gradient-to-r from-purple-600 via-fuchsia-400 to-white h-full" style="width: 0%"></div>
+                    </div>
+                    <div class="grid grid-cols-3 gap-2 items-center text-center">
+                      <div class="p-2 bg-black/50 border border-purple-900/50">
+                        <span class="text-[9px] uppercase tracking-wider text-purple-400/70 block">Compás Ant.</span>
+                        <span id="prevChordBox" class="text-base font-bold text-purple-300 font-mono">--</span>
+                      </div>
+                      <div class="p-2.5 neon-chord-box">
+                        <span class="text-[9px] text-fuchsia-200 uppercase font-semibold tracking-wider block">En Compás</span>
+                        <span id="currentChordBox" class="text-3xl font-extrabold text-white tracking-tight font-mono">--</span>
+                      </div>
+                      <div class="p-2 bg-black/50 border border-purple-900/50">
+                        <span class="text-[9px] uppercase tracking-wider text-purple-400/70 block">5ta (Power)</span>
+                        <span id="nextChordBox" class="text-base font-bold text-purple-200 font-mono">--</span>
+                      </div>
+                    </div>
+                    <div class="mt-2.5">
+                      <div id="chromaBars" class="grid grid-cols-12 gap-1 h-8 items-end pt-1 px-1.5 bg-black/60 border border-purple-900/40"></div>
+                      <div class="grid grid-cols-12 gap-1 text-[9px] text-center text-purple-300/80 font-mono mt-1 font-semibold">
+                        <span>C</span><span>C#</span><span>D</span><span>D#</span><span>E</span><span>F</span><span>F#</span><span>G</span><span>G#</span><span>A</span><span>A#</span><span>B</span>
+                      </div>
+                    </div>
                   </div>
-                  <div class="w-full bg-black/60 h-1.5 rounded-full overflow-hidden mb-3 border border-purple-900/40"><div id="measureLockBar" class="bg-gradient-to-r from-purple-600 via-fuchsia-400 to-white h-full transition-all duration-100" style="width: 0%"></div></div>
-                  <div class="grid grid-cols-3 gap-2.5 items-center text-center">
-                    <div class="p-2.5 rounded-xl bg-black/40 border border-purple-900/40"><span class="text-[9px] uppercase tracking-wider text-purple-400/70 block mb-0.5">Compás Ant.</span><span id="prevChordBox" class="text-base font-bold text-purple-300 font-mono">--</span></div>
-                    <div class="p-3 rounded-xl neon-chord-box transform scale-105"><span class="text-[9px] text-fuchsia-200 uppercase font-semibold tracking-wider block mb-0.5">En Compás</span><span id="currentChordBox" class="text-3xl font-extrabold text-white tracking-tight font-mono">--</span></div>
-                    <div class="p-2.5 rounded-xl bg-black/40 border border-purple-900/40"><span class="text-[9px] uppercase tracking-wider text-purple-400/70 block mb-0.5">5ta (Power)</span><span id="nextChordBox" class="text-base font-bold text-purple-200 font-mono">--</span></div>
+
+                  <!-- SECCION METRONOMO QUIRURGICO EN TIEMPO REAL -->
+                  <div class="pt-2.5 border-t border-purple-800/40 flex items-center justify-between gap-2">
+                    <div class="flex items-center gap-2">
+                      <div class="px-2.5 py-1 bg-black/60 border border-fuchsia-500/40 text-center min-w-[76px]">
+                        <span id="bpmValueDisplay" class="text-base font-extrabold text-fuchsia-300 font-mono leading-none">120</span>
+                        <span class="text-[8px] uppercase text-purple-300 block">BPM Auto</span>
+                      </div>
+                      <div class="flex items-center gap-1.5 px-2 py-1.5 bg-black/40 border border-purple-900/40">
+                        <span id="beat-0" class="w-3 h-3 bg-purple-900 border border-purple-500/40 transition-transform"></span>
+                        <span id="beat-1" class="w-3 h-3 bg-purple-900 border border-purple-500/40 transition-transform"></span>
+                        <span id="beat-2" class="w-3 h-3 bg-purple-900 border border-purple-500/40 transition-transform"></span>
+                        <span id="beat-3" class="w-3 h-3 bg-purple-900 border border-purple-500/40 transition-transform"></span>
+                      </div>
+                    </div>
+                    <div class="flex items-center gap-1">
+                      <button onclick="adjustBpm(-1)" class="w-7 h-7 bg-purple-950 border border-purple-700/50 text-xs text-purple-200 font-bold">-</button>
+                      <button onclick="adjustBpm(1)" class="w-7 h-7 bg-purple-950 border border-purple-700/50 text-xs text-purple-200 font-bold">+</button>
+                      <button onclick="tapTempo()" class="px-2 h-7 bg-purple-950 border border-purple-700/50 text-[10px] text-purple-200 font-mono uppercase">Tap</button>
+                      <button onclick="toggleMetronomeSound()" id="metroSoundBtn" class="px-2.5 h-7 bg-purple-950 border border-purple-600/50 text-[10px] text-purple-200 font-semibold flex items-center gap-1">
+                        <i class="fa-solid fa-volume-xmark" id="metroIcon"></i> Clic
+                      </button>
+                    </div>
                   </div>
-                  <div class="mt-3"><div id="chromaBars" class="grid grid-cols-12 gap-1 h-9 items-end pt-1.5 px-1.5 bg-black/50 rounded-lg border border-purple-900/30"></div><div class="grid grid-cols-12 gap-1 text-[9px] text-center text-purple-300/80 font-mono mt-1 font-semibold"><span>C</span><span>C#</span><span>D</span><span>D#</span><span>E</span><span>F</span><span>F#</span><span>G</span><span>G#</span><span>A</span><span>A#</span><span>B</span></div></div>
                 </div>
               </div>
+
+              <!-- CONTROLES DE REPRODUCCION -->
               <div class="space-y-2.5 pt-1">
-                <div class="flex items-center justify-between"><div class="min-w-0 flex-1 pr-2"><h2 id="fullTitle" class="text-base sm:text-lg font-bold text-white truncate">Sin canción</h2><p id="fullArtist" class="text-xs sm:text-sm text-purple-300/80 truncate">--</p></div><span id="fullGenreBadge" class="px-2.5 py-1 rounded-md text-[10px] bg-purple-950 border border-purple-600/40 text-purple-200 shrink-0">Space Rock</span></div>
-                <div><input type="range" id="fullSeek" value="0" min="0" max="100" step="0.1" oninput="seekAudio(this.value)" class="w-full" /><div class="flex justify-between text-[11px] text-purple-300/70 mt-1 font-mono"><span id="fullCurrentTime">0:00</span><span id="fullDuration">0:00</span></div></div>
-                <div class="flex items-center justify-between px-2 pt-1">
-                  <button onclick="toggleShuffle()" id="shuffleBtn" class="w-10 h-10 rounded-full flex items-center justify-center text-purple-400/50"><i class="fa-solid fa-shuffle text-base"></i></button>
-                  <button onclick="prevTrack()" class="w-12 h-12 rounded-full bg-purple-950/90 border border-purple-800/40 flex items-center justify-center text-white text-lg active:scale-90"><i class="fa-solid fa-backward-step"></i></button>
-                  <button onclick="togglePlay()" id="fullPlayBtn" class="w-14 h-14 rounded-full bg-gradient-to-tr from-purple-600 to-fuchsia-500 text-white flex items-center justify-center text-xl shadow-lg active:scale-95"><i class="fa-solid fa-play"></i></button>
-                  <button onclick="nextTrack()" class="w-12 h-12 rounded-full bg-purple-950/90 border border-purple-800/40 flex items-center justify-center text-white text-lg active:scale-90"><i class="fa-solid fa-forward-step"></i></button>
-                  <button onclick="cycleRepeat()" id="repeatBtn" class="w-10 h-10 rounded-full flex items-center justify-center text-purple-400/50 relative"><i class="fa-solid fa-repeat text-base"></i><span id="repeatOneBadge" class="hidden absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full bg-fuchsia-400 text-[10px] font-bold text-black flex items-center justify-center">1</span></button>
-                </div>
-                <p class="belmont-thin text-[7px] text-center uppercase text-purple-300 opacity-20 pt-1">Desarrollado por Edward Belmont</p>
-              </div>
-            </div>
-
-            <div id="editModal" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-md hidden items-center justify-center p-4">
-              <div class="glass-card rounded-2xl w-full max-w-md p-5 space-y-3.5 border border-purple-500/40">
-                <div class="flex justify-between items-center border-b border-purple-800/40 pb-2"><h3 class="font-semibold text-sm text-purple-100">Modificar Información y Portada</h3><button onclick="closeModal('editModal')" class="text-purple-400"><i class="fa-solid fa-xmark"></i></button></div>
-                <div class="space-y-3 text-xs">
-                  <div><label class="text-purple-300/80 block mb-1">Nombre</label><input type="text" id="editTitle" class="w-full p-2.5 rounded-lg bg-purple-950/90 border border-purple-700/50 text-white" /></div>
-                  <div class="grid grid-cols-2 gap-2">
-                    <div><label class="text-purple-300/80 block mb-1">Artista</label><input type="text" id="editArtist" class="w-full p-2.5 rounded-lg bg-purple-950/90 border border-purple-700/50 text-white" /></div>
-                    <div><label class="text-purple-300/80 block mb-1">Álbum</label><input type="text" id="editAlbum" class="w-full p-2.5 rounded-lg bg-purple-950/90 border border-purple-700/50 text-white" /></div>
+                <div class="flex items-center justify-between">
+                  <div class="min-w-0 flex-1 pr-2">
+                    <h2 id="fullTitle" class="text-base sm:text-lg font-bold text-white truncate">Sin canción</h2>
+                    <p id="fullArtist" class="text-xs sm:text-sm text-purple-300/80 truncate">--</p>
                   </div>
-                  <div><label class="text-purple-300/80 block mb-1">Cambiar Portada</label><input type="file" id="editCoverFile" accept="image/*" class="w-full text-[11px] text-purple-300 file:mr-2 file:py-1.5 file:px-2 file:rounded-md file:border-0 file:bg-purple-700 file:text-white" /></div>
+                  <button onclick="openModal('eqModal')" id="fullGenreBadge" class="px-2.5 py-1 text-[10px] bg-purple-950 border border-fuchsia-500/40 text-fuchsia-200 shrink-0 font-mono">EQ: Space Rock</button>
                 </div>
-                <div class="flex justify-end gap-2 pt-2"><button onclick="closeModal('editModal')" class="px-4 py-2 rounded-xl bg-purple-950 text-purple-300 text-xs">Cancelar</button><button onclick="saveTrackEdits()" class="px-5 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white text-xs font-semibold">Guardar</button></div>
+                <div>
+                  <input type="range" id="fullSeek" value="0" min="0" max="100" step="0.1" oninput="seekAudio(this.value)" class="w-full" />
+                  <div class="flex justify-between text-[11px] text-purple-300/70 mt-1 font-mono">
+                    <span id="fullCurrentTime">0:00</span>
+                    <span id="fullDuration">0:00</span>
+                  </div>
+                </div>
+                <div class="flex items-center justify-between px-2 pt-1">
+                  <button onclick="toggleShuffle()" id="shuffleBtn" class="w-10 h-10 flex items-center justify-center text-purple-400/50"><i class="fa-solid fa-shuffle text-base"></i></button>
+                  <button onclick="prevTrack()" class="w-12 h-12 bg-purple-950/90 border border-purple-700/50 flex items-center justify-center text-white text-lg active:scale-90"><i class="fa-solid fa-backward-step"></i></button>
+                  <button onclick="togglePlay()" id="fullPlayBtn" class="w-14 h-14 bg-gradient-to-tr from-purple-600 to-fuchsia-500 text-white flex items-center justify-center text-xl shadow-lg border border-fuchsia-300/50 active:scale-95"><i class="fa-solid fa-play"></i></button>
+                  <button onclick="nextTrack()" class="w-12 h-12 bg-purple-950/90 border border-purple-700/50 flex items-center justify-center text-white text-lg active:scale-90"><i class="fa-solid fa-forward-step"></i></button>
+                  <button onclick="cycleRepeat()" id="repeatBtn" class="w-10 h-10 flex items-center justify-center text-purple-400/50 relative"><i class="fa-solid fa-repeat text-base"></i><span id="repeatOneBadge" class="hidden absolute -top-0.5 -right-0.5 w-4 h-4 bg-fuchsia-400 text-[10px] font-bold text-black flex items-center justify-center">1</span></button>
+                </div>
               </div>
             </div>
 
-            <!-- MODAL ECUALIZADOR AVANZADO CON PRESETS COMPLETOS -->
-            <div id="eqModal" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-md hidden items-center justify-center p-4">
-              <div class="glass-card rounded-2xl w-full max-w-md p-5 space-y-4 border border-purple-500/40">
+            <!-- MODAL EDITAR CANCION -->
+            <div id="editModal" class="fixed inset-0 z-50 bg-black/85 hidden items-center justify-center p-4">
+              <div class="glass-card w-full max-w-md p-5 space-y-3.5 border border-purple-500/40">
                 <div class="flex justify-between items-center border-b border-purple-800/40 pb-2">
-                  <h3 class="font-semibold text-sm text-purple-100">Ecualizador por Género</h3>
+                  <h3 class="font-semibold text-sm text-purple-100">Modificar Información y Portada</h3>
+                  <button onclick="closeModal('editModal')" class="text-purple-400"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+                <div class="space-y-3 text-xs">
+                  <div><label class="text-purple-300/80 block mb-1">Nombre</label><input type="text" id="editTitle" class="w-full p-2.5 bg-purple-950/90 border border-purple-700/50 text-white" /></div>
+                  <div class="grid grid-cols-2 gap-2">
+                    <div><label class="text-purple-300/80 block mb-1">Artista</label><input type="text" id="editArtist" class="w-full p-2.5 bg-purple-950/90 border border-purple-700/50 text-white" /></div>
+                    <div><label class="text-purple-300/80 block mb-1">Álbum</label><input type="text" id="editAlbum" class="w-full p-2.5 bg-purple-950/90 border border-purple-700/50 text-white" /></div>
+                  </div>
+                  <div><label class="text-purple-300/80 block mb-1">Cambiar Portada</label><input type="file" id="editCoverFile" accept="image/*" class="w-full text-[11px] text-purple-300 file:mr-2 file:py-1.5 file:px-2 file:border-0 file:bg-purple-700 file:text-white" /></div>
+                </div>
+                <div class="flex justify-end gap-2 pt-2">
+                  <button onclick="closeModal('editModal')" class="px-4 py-2 bg-purple-950 text-purple-300 text-xs">Cancelar</button>
+                  <button onclick="saveTrackEdits()" class="px-5 py-2 bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white text-xs font-semibold">Guardar</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- MODAL ECUALIZADOR DE 16 GENEROS + PREAMP -->
+            <div id="eqModal" class="fixed inset-0 z-50 bg-black/85 hidden items-center justify-center p-4">
+              <div class="glass-card w-full max-w-md p-5 space-y-4 border border-purple-500/40 max-h-[90vh] overflow-y-auto">
+                <div class="flex justify-between items-center border-b border-purple-800/40 pb-2">
+                  <h3 class="font-semibold text-sm text-purple-100">Ecualizador Master DSP (16 Géneros)</h3>
                   <button onclick="closeModal('eqModal')" class="text-purple-400"><i class="fa-solid fa-xmark"></i></button>
                 </div>
-                <div class="flex flex-wrap gap-1.5">
-                  <button onclick="applyEqPreset('Space Rock')" class="px-3 py-1 rounded-lg text-xs bg-purple-700 text-white">Space Rock</button>
-                  <button onclick="applyEqPreset('Gothic Rock')" class="px-3 py-1 rounded-lg text-xs bg-purple-950 border border-purple-800 text-purple-300">Gothic Rock</button>
-                  <button onclick="applyEqPreset('Metal')" class="px-3 py-1 rounded-lg text-xs bg-purple-950 border border-purple-800 text-purple-300">Metal</button>
-                  <button onclick="applyEqPreset('Pop')" class="px-3 py-1 rounded-lg text-xs bg-purple-950 border border-purple-800 text-purple-300">Pop</button>
-                  <button onclick="applyEqPreset('Rock')" class="px-3 py-1 rounded-lg text-xs bg-purple-950 border border-purple-800 text-purple-300">Rock</button>
-                  <button onclick="applyEqPreset('Salsa')" class="px-3 py-1 rounded-lg text-xs bg-purple-950 border border-purple-800 text-purple-300">Salsa</button>
-                  <button onclick="applyEqPreset('Cumbia')" class="px-3 py-1 rounded-lg text-xs bg-purple-950 border border-purple-800 text-purple-300">Cumbia</button>
-                  <button onclick="applyEqPreset('Flat')" class="px-3 py-1 rounded-lg text-xs bg-purple-950 border border-purple-800 text-purple-300">Plano</button>
-                </div>
-                <div class="space-y-3 pt-1">
-                  <div class="flex items-center gap-3"><span class="text-xs text-purple-300 w-16 font-mono">60 Hz</span><input type="range" id="eq-0" min="-12" max="12" value="5" oninput="updateEqBand(0, this.value)" class="flex-1" /><span id="eq-val-0" class="text-xs text-purple-200 w-10 text-right font-mono">+5dB</span></div>
+                <div id="eqPresetContainer" class="grid grid-cols-4 gap-1.5"></div>
+                <div class="space-y-3 pt-2 border-t border-purple-900/50">
+                  <div class="flex items-center gap-3"><span class="text-xs text-fuchsia-300 w-16 font-mono font-bold">60 Hz</span><input type="range" id="eq-0" min="-12" max="12" value="5" oninput="updateEqBand(0, this.value)" class="flex-1" /><span id="eq-val-0" class="text-xs text-purple-200 w-10 text-right font-mono">+5dB</span></div>
                   <div class="flex items-center gap-3"><span class="text-xs text-purple-300 w-16 font-mono">230 Hz</span><input type="range" id="eq-1" min="-12" max="12" value="2" oninput="updateEqBand(1, this.value)" class="flex-1" /><span id="eq-val-1" class="text-xs text-purple-200 w-10 text-right font-mono">+2dB</span></div>
                   <div class="flex items-center gap-3"><span class="text-xs text-purple-300 w-16 font-mono">910 Hz</span><input type="range" id="eq-2" min="-12" max="12" value="0" oninput="updateEqBand(2, this.value)" class="flex-1" /><span id="eq-val-2" class="text-xs text-purple-200 w-10 text-right font-mono">0dB</span></div>
                   <div class="flex items-center gap-3"><span class="text-xs text-purple-300 w-16 font-mono">3.6 kHz</span><input type="range" id="eq-3" min="-12" max="12" value="4" oninput="updateEqBand(3, this.value)" class="flex-1" /><span id="eq-val-3" class="text-xs text-purple-200 w-10 text-right font-mono">+4dB</span></div>
-                  <div class="flex items-center gap-3"><span class="text-xs text-purple-300 w-16 font-mono">14 kHz</span><input type="range" id="eq-4" min="-12" max="12" value="6" oninput="updateEqBand(4, this.value)" class="flex-1" /><span id="eq-val-4" class="text-xs text-purple-200 w-10 text-right font-mono">+6dB</span></div>
+                  <div class="flex items-center gap-3"><span class="text-xs text-fuchsia-300 w-16 font-mono font-bold">14 kHz</span><input type="range" id="eq-4" min="-12" max="12" value="6" oninput="updateEqBand(4, this.value)" class="flex-1" /><span id="eq-val-4" class="text-xs text-purple-200 w-10 text-right font-mono">+6dB</span></div>
                 </div>
               </div>
             </div>
 
-            <div id="timerModal" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-md hidden items-center justify-center p-4">
-              <div class="glass-card rounded-2xl w-full max-w-sm p-5 space-y-3 border border-purple-500/40 text-center">
-                <div class="flex justify-between items-center border-b border-purple-800/40 pb-2"><h3 class="font-semibold text-sm text-purple-100">Temporizador de Apagado</h3><button onclick="closeModal('timerModal')" class="text-purple-400"><i class="fa-solid fa-xmark"></i></button></div>
-                <div class="grid grid-cols-2 gap-2 pt-2"><button onclick="setSleepTimer(10)" class="p-2.5 rounded-xl bg-purple-950 border border-purple-800/40 text-xs font-medium">10 Min</button><button onclick="setSleepTimer(20)" class="p-2.5 rounded-xl bg-purple-950 border border-purple-800/40 text-xs font-medium">20 Min</button></div>
-                <button onclick="setSleepTimer(0)" class="w-full p-2.5 rounded-xl bg-red-950/50 border border-red-800/40 text-xs text-red-300 font-medium mt-2">Desactivar</button>
+            <!-- MODAL TEMPORIZADOR -->
+            <div id="timerModal" class="fixed inset-0 z-50 bg-black/85 hidden items-center justify-center p-4">
+              <div class="glass-card w-full max-w-sm p-5 space-y-3 border border-purple-500/40 text-center">
+                <div class="flex justify-between items-center border-b border-purple-800/40 pb-2">
+                  <h3 class="font-semibold text-sm text-purple-100">Temporizador de Apagado</h3>
+                  <button onclick="closeModal('timerModal')" class="text-purple-400"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+                <div class="grid grid-cols-3 gap-2 pt-2">
+                  <button onclick="setSleepTimer(10)" class="p-2.5 bg-purple-950 border border-purple-800/40 text-xs font-medium">10 Min</button>
+                  <button onclick="setSleepTimer(20)" class="p-2.5 bg-purple-950 border border-purple-800/40 text-xs font-medium">20 Min</button>
+                  <button onclick="setSleepTimer(45)" class="p-2.5 bg-purple-950 border border-purple-800/40 text-xs font-medium">45 Min</button>
+                </div>
+                <button onclick="setSleepTimer(0)" class="w-full p-2.5 bg-red-950/50 border border-red-800/40 text-xs text-red-300 font-medium mt-2">Desactivar</button>
               </div>
             </div>
 
-            <audio id="audioElement" crossorigin="anonymous"></audio>
+            <audio id="audioElement" preload="auto" crossorigin="anonymous"></audio>
 
             <script>
-              const fallbackCoverSvg = "data:image/svg+xml;utf8," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300"><rect width="300" height="300" fill="#06020d"/><circle cx="150" cy="150" r="105" fill="none" stroke="#9333ea" stroke-width="2" opacity="0.4"/><path d="M85 138 A68 68 0 0 1 215 138" fill="none" stroke="#f0abfc" stroke-width="5" stroke-linecap="round"/><polygon points="150,65 92,165 122,165 150,110" fill="#ffffff"/><polygon points="150,65 208,165 178,165 150,110" fill="#c084fc"/><polygon points="128,160 150,225 172,160 150,180" fill="#e879f9"/><polygon points="150,126 160,146 150,166 140,146" fill="#ffffff"/></svg>`);
+              window.defaultLogoDataUri = "data:image/svg+xml;utf8," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300"><rect width="300" height="300" fill="#06020d"/><circle cx="150" cy="150" r="110" fill="none" stroke="#a855f7" stroke-width="3" opacity="0.5"/><path d="M80 138 A72 72 0 0 1 220 138" fill="none" stroke="#f0abfc" stroke-width="6" stroke-linecap="round"/><polygon points="150,55 88,168 122,168 150,108" fill="#f5d0fe"/><polygon points="150,55 212,168 178,168 150,108" fill="#a855f7"/><polygon points="124,162 150,235 176,162 150,184" fill="#c084fc"/><polygon points="150,122 162,146 150,170 138,146" fill="#ffffff"/></svg>`);
 
-              let tracks = [], customOverrides = JSON.parse(localStorage.getItem("cosmos_overrides_v11")) || {}, playlists = [];
+              const headerLogo = document.getElementById("headerLogoImg");
+              headerLogo.onerror = function() { this.src = window.defaultLogoDataUri; };
+
+              let tracks = [], customOverrides = JSON.parse(localStorage.getItem("cosmos_overrides_v12")) || {};
               let currentTab = "songs", currentTrackIndex = -1, isPlaying = false, shuffleMode = false, repeatMode = 0;
+              let activePresetName = "Space Rock", sleepTimerId = null;
+
+              const eqPresets = {
+                "Space Rock": [5, 2, 0, 4, 6],
+                "Gothic Rock": [6, 4, -1, 3, 5],
+                "Love Metal": [6, 3, -1, 5, 6],
+                "Symphonic": [5, 2, 1, 5, 7],
+                "Metal": [7, 3, -3, 5, 7],
+                "Rock": [5, 3, -1, 4, 5],
+                "Pop": [2, 3, 4, 3, 3],
+                "Acoustic": [3, 2, 1, 4, 5],
+                "Bass Boost": [9, 6, 0, 1, 2],
+                "Vocal": [-2, 1, 6, 5, 2],
+                "Synthwave": [7, 4, -1, 3, 6],
+                "Salsa": [4, 3, 3, 4, 5],
+                "Cumbia": [7, 5, 1, 3, 4],
+                "Jazz": [4, 2, -1, 3, 4],
+                "Classical": [3, 1, 0, 3, 5],
+                "Plano": [0, 0, 0, 0, 0]
+              };
+
+              function renderEqButtons() {
+                const container = document.getElementById("eqPresetContainer");
+                container.innerHTML = "";
+                Object.keys(eqPresets).forEach(name => {
+                  const btn = document.createElement("button");
+                  const isAct = name === activePresetName;
+                  btn.className = isAct
+                    ? "px-2 py-1.5 text-[10px] font-bold bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white border border-fuchsia-300 truncate"
+                    : "px-2 py-1.5 text-[10px] bg-purple-950/80 border border-purple-800/50 text-purple-300 truncate";
+                  btn.textContent = name;
+                  btn.onclick = () => applyEqPreset(name);
+                  container.appendChild(btn);
+                });
+              }
 
               window.onNativeLibraryLoaded = function(jsonArray) {
                 try {
@@ -540,8 +1020,9 @@ jobs:
                       title: saved.title || item.title,
                       artist: saved.artist || item.artist,
                       album: saved.album || item.album,
-                      genre: saved.genre || "Space Rock",
-                      cover: saved.cover || item.cover || fallbackCoverSvg,
+                      albumId: item.albumId !== undefined ? item.albumId : -1,
+                      durationMs: item.durationMs || 0,
+                      cover: saved.cover || item.cover || "ic_launcher.png",
                       audioUrl: item.audioUrl
                     };
                   });
@@ -551,174 +1032,260 @@ jobs:
               };
 
               function rescanPhoneLibrary() { if(window.CosmosNative) window.CosmosNative.rescanMediaStore(); }
+
               function notifyNativeAndroidService() {
                 if(window.CosmosNative && currentTrackIndex >= 0 && tracks[currentTrackIndex]) {
                   const t = tracks[currentTrackIndex];
-                  window.CosmosNative.updateNotification(t.title, t.artist, t.album, isPlaying);
+                  const durMs = Math.round((audioEl.duration || (t.durationMs / 1000) || 0) * 1000);
+                  const posMs = Math.round((audioEl.currentTime || 0) * 1000);
+                  window.CosmosNative.updateNotification(t.title, t.artist, t.album, t.albumId || -1, durMs, posMs, isPlaying);
                 }
               }
 
               // =========================================================================
-              // MOTOR DSP DE ACORDES MAESTRO Y CONEXIÓN WEB AUDIO AUTOMÁTICA
+              // MOTOR DE AUDIO SIN LAG (PLAYBACK BUFFER) + DSP ACORDES + AUTO-BPM
               // =========================================================================
               let audioCtx = null, analyser = null, mediaSource = null, isSourceConnected = false, eqFilters = [];
-              let chordDetectionMode = "power";
+              let chordDetectionMode = "triad";
               const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-              let smoothedRoot = new Array(12).fill(0), smoothedChroma = new Array(12).fill(0);
+              let smoothedRoot = new Float32Array(12), smoothedChroma = new Float32Array(12);
+              let fftDbBuffer = null, chromaBarEls = [];
               let lockedPitch = -1, lockedQuality = "", prevChordName = "--", lockTime = 0, challenger = -1, challengerCount = 0;
-              const HOLD_MS = 1400;
+              const HOLD_MS = 1350;
               const audioEl = document.getElementById("audioElement");
+
+              // Variables del Metrónomo y Detector Automático de Tempo (BPM)
+              let detectedBpm = 120, prevLowEnergy = 0, lastPeakTime = 0;
+              let onsetIntervals = [], tapTimes = [];
+              let metronomeSoundEnabled = false, currentBeatIndex = 0, nextBeatTime = 0;
 
               function initAudioEngine() {
                 if (!audioCtx) {
                   try {
-                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    const AC = window.AudioContext || window.webkitAudioContext;
+                    audioCtx = new AC({ latencyHint: "playback", sampleRate: 48000 });
                     analyser = audioCtx.createAnalyser();
-                    analyser.fftSize = 8192;
-                    analyser.smoothingTimeConstant = 0.82;
-
-                    // Crear filtros del ecualizador
-                    const freqs = [60, 230, 910, 3600, 14000];
-                    let lastNode = mediaSource || null;
-                    
-                    // Conexión segura con ecualizador por bandas
-                    audioEl.crossOrigin = "anonymous";
+                    analyser.fftSize = 4096;
+                    analyser.smoothingTimeConstant = 0.80;
+                    fftDbBuffer = new Float32Array(analyser.frequencyBinCount);
                   } catch (e) {}
                 }
-                
                 if (audioCtx && audioCtx.state === "suspended") {
                   audioCtx.resume();
                 }
-
                 if (!isSourceConnected && audioEl && audioCtx) {
                   try {
                     mediaSource = audioCtx.createMediaElementSource(audioEl);
-                    
-                    // Crear nodos de ecualización biquad
                     const freqs = [60, 230, 910, 3600, 14000];
-                    eqFilters = freqs.map(f => {
+                    const initialGains = eqPresets[activePresetName] || [0,0,0,0,0];
+                    eqFilters = freqs.map((f, i) => {
                       const filter = audioCtx.createBiquadFilter();
                       filter.type = "peaking";
                       filter.frequency.value = f;
-                      filter.gain.value = 0;
+                      filter.gain.value = initialGains[i];
                       filter.Q.value = 1.0;
                       return filter;
                     });
-
-                    // Encadenar: source -> eq[0] -> eq[1] -> eq[2] -> eq[3] -> eq[4] -> analyser -> destination
                     let curr = mediaSource;
                     eqFilters.forEach(f => { curr.connect(f); curr = f; });
                     curr.connect(analyser);
                     analyser.connect(audioCtx.destination);
-
                     isSourceConnected = true;
-                    requestAnimationFrame(dspLoop);
                   } catch (e) {
                     isSourceConnected = true;
-                    requestAnimationFrame(dspLoop);
                   }
                 }
               }
 
-              // Presets de Ecualización Completos
-              const eqPresets = {
-                "Space Rock": [5, 2, 0, 4, 6],
-                "Gothic Rock": [6, 4, -1, 3, 5],
-                "Metal": [7, 3, -2, 5, 7],
-                "Pop": [3, 1, 2, 3, 4],
-                "Rock": [5, 3, 0, 3, 5],
-                "Salsa": [4, 2, 3, 2, 4],
-                "Cumbia": [6, 4, 1, 2, 3],
-                "Flat": [0, 0, 0, 0, 0]
-              };
+              // Bucle DSP desacoplado a 20Hz (cada 50ms) para CERO lag en el audio
+              setInterval(() => {
+                if (!isPlaying || !analyser || !audioCtx || !fftDbBuffer) return;
 
-              function applyEqPreset(name) {
-                const gains = eqPresets[name];
-                if (!gains) return;
-                gains.forEach((val, idx) => {
-                  const slider = document.getElementById(`eq-${idx}`);
-                  const valLabel = document.getElementById(`eq-val-${idx}`);
-                  if (slider) slider.value = val;
-                  if (valLabel) valLabel.textContent = (val > 0 ? "+" : "") + val + "dB";
-                  updateEqBand(idx, val);
-                });
-              }
+                analyser.getFloatFrequencyData(fftDbBuffer);
+                const binW = audioCtx.sampleRate / analyser.fftSize;
+                const instRoot = new Float32Array(12);
+                const instChroma = new Float32Array(12);
 
-              function updateEqBand(index, val) {
-                if (eqFilters && eqFilters[index]) {
-                  eqFilters[index].gain.value = parseFloat(val);
-                }
-                const valLabel = document.getElementById(`eq-val-${index}`);
-                if (valLabel) valLabel.textContent = (val > 0 ? "+" : "") + val + "dB";
-              }
+                // 1. Detección de Transientes Rítmicos (65Hz - 180Hz) para BPM Automático
+                let lowRhythmEnergy = 0;
+                const minBin = Math.max(2, Math.floor(60 / binW));
+                const maxBin = Math.min(fftDbBuffer.length - 4, Math.ceil(780 / binW));
 
-              function dspLoop() {
-                if (isPlaying && analyser && audioCtx) {
-                  const bufLen = analyser.frequencyBinCount;
-                  const fftDb = new Float32Array(bufLen);
-                  analyser.getFloatFrequencyData(fftDb);
-                  const instRoot = new Array(12).fill(0), instChroma = new Array(12).fill(0);
-                  const binW = audioCtx.sampleRate / analyser.fftSize;
-
-                  // Filtrado estricto enfocado en frecuencias de guitarra (55Hz a 880Hz)
-                  for (let b = Math.max(2, Math.floor(55/binW)); b < Math.min(bufLen-4, Math.ceil(880/binW)); b++) {
-                    const db = fftDb[b];
-                    if (db > -78 && db >= fftDb[b-1] && db >= fftDb[b+1]) {
-                      const freq = (b + 0.5 * (fftDb[b-1] - fftDb[b+1]) / (fftDb[b-1] - 2*db + fftDb[b+1])) * binW;
-                      if (freq < 55 || freq > 880) continue;
-                      const mag = Math.pow(10, db / 20);
+                for (let b = minBin; b < maxBin; b++) {
+                  const db = fftDbBuffer[b];
+                  if (db > -75) {
+                    const mag = Math.pow(10, db / 20);
+                    const freq = b * binW;
+                    if (freq >= 65 && freq <= 175) {
+                      lowRhythmEnergy += mag;
+                    }
+                    if (db >= fftDbBuffer[b - 1] && db >= fftDbBuffer[b + 1]) {
                       const p = ((Math.round(12 * Math.log2(freq / 440) + 69) % 12) + 12) % 12;
                       instChroma[p] += mag;
-                      if (freq <= 350) instRoot[p] += mag * (freq < 190 ? 1.6 : 1.1);
+                      // Foco quirúrgico en fundamentales de guitarra (E2 82Hz a G4 392Hz)
+                      if (freq >= 78 && freq <= 400) {
+                        instRoot[p] += mag * (freq < 220 ? 1.75 : 1.25);
+                      }
                     }
-                  }
-
-                  let sig = 0;
-                  for(let i=0; i<12; i++) {
-                    smoothedRoot[i] = smoothedRoot[i]*0.86 + instRoot[i]*0.14;
-                    smoothedChroma[i] = smoothedChroma[i]*0.84 + instChroma[i]*0.16;
-                    sig += smoothedRoot[i];
-                  }
-
-                  const maxR = Math.max(...smoothedRoot, 0.00001);
-                  for(let i=0; i<12; i++) {
-                    const bar = document.getElementById(`chroma-bar-${i}`);
-                    if(bar) {
-                      bar.style.height = `${Math.max(10, Math.round((smoothedRoot[i]/maxR)*100))}%`;
-                      bar.style.opacity = i === lockedPitch ? "1" : "0.4";
-                    }
-                  }
-
-                  if(sig > 0.0015) {
-                    let bestIdx = 0; for(let i=1; i<12; i++) if(smoothedRoot[i] > smoothedRoot[bestIdx]) bestIdx = i;
-                    const now = performance.now();
-                    const elapsed = now - lockTime;
-                    const barElem = document.getElementById("measureLockBar");
-                    if(barElem) barElem.style.width = `${Math.min(100, Math.round((elapsed / HOLD_MS) * 100))}%`;
-
-                    if(lockedPitch === -1) {
-                      lockChord(bestIdx, now);
-                    } else if(bestIdx !== lockedPitch) {
-                      if(smoothedRoot[bestIdx] > smoothedRoot[lockedPitch] * (elapsed < HOLD_MS ? 1.4 : 1.15)) {
-                        if(challenger === bestIdx) challengerCount++; else { challenger = bestIdx; challengerCount = 1; }
-                        if(challengerCount >= 10) lockChord(bestIdx, now);
-                      } else challengerCount = Math.max(0, challengerCount - 1);
-                    } else challengerCount = 0;
                   }
                 }
-                requestAnimationFrame(dspLoop);
+
+                const now = performance.now();
+                // Detector de picos de percusión/rasgueo para calcular el Tempo (BPM)
+                if (lowRhythmEnergy > prevLowEnergy * 1.38 && lowRhythmEnergy > 0.012 && (now - lastPeakTime) > 260) {
+                  const interval = now - lastPeakTime;
+                  lastPeakTime = now;
+                  if (interval >= 320 && interval <= 1050) {
+                    let candidateBpm = 60000 / interval;
+                    while (candidateBpm < 75) candidateBpm *= 2;
+                    while (candidateBpm > 165) candidateBpm /= 2;
+                    onsetIntervals.push(candidateBpm);
+                    if (onsetIntervals.length > 12) onsetIntervals.shift();
+                    if (onsetIntervals.length >= 4) {
+                      const sorted = [...onsetIntervals].sort((a, b) => a - b);
+                      const median = sorted[Math.floor(sorted.length / 2)];
+                      detectedBpm = Math.round(detectedBpm * 0.85 + median * 0.15);
+                      updateBpmUI();
+                    }
+                  }
+                }
+                prevLowEnergy = lowRhythmEnergy * 0.75 + prevLowEnergy * 0.25;
+
+                // 2. Procesamiento Armónico de Acordes de Guitarra
+                let sig = 0;
+                for (let i = 0; i < 12; i++) {
+                  smoothedRoot[i] = smoothedRoot[i] * 0.80 + instRoot[i] * 0.20;
+                  smoothedChroma[i] = smoothedChroma[i] * 0.78 + instChroma[i] * 0.22;
+                  sig += smoothedRoot[i];
+                }
+
+                let maxR = 0.00001;
+                for (let i = 0; i < 12; i++) if (smoothedRoot[i] > maxR) maxR = smoothedRoot[i];
+
+                for (let i = 0; i < 12; i++) {
+                  const bar = chromaBarEls[i];
+                  if (bar) {
+                    const scale = Math.max(0.12, smoothedRoot[i] / maxR);
+                    bar.style.transform = `scaleY(${scale.toFixed(2)})`;
+                    bar.style.opacity = i === lockedPitch ? "1" : "0.42";
+                  }
+                }
+
+                if (sig > 0.0012) {
+                  let bestIdx = 0;
+                  for (let i = 1; i < 12; i++) if (smoothedRoot[i] > smoothedRoot[bestIdx]) bestIdx = i;
+
+                  const elapsed = now - lockTime;
+                  const barElem = document.getElementById("measureLockBar");
+                  if (barElem) barElem.style.width = `${Math.min(100, Math.round((elapsed / HOLD_MS) * 100))}%`;
+
+                  if (lockedPitch === -1) {
+                    lockChord(bestIdx, now);
+                  } else if (bestIdx !== lockedPitch) {
+                    if (smoothedRoot[bestIdx] > smoothedRoot[lockedPitch] * (elapsed < HOLD_MS ? 1.35 : 1.14)) {
+                      if (challenger === bestIdx) challengerCount++; else { challenger = bestIdx; challengerCount = 1; }
+                      if (challengerCount >= 5) lockChord(bestIdx, now);
+                    } else {
+                      challengerCount = Math.max(0, challengerCount - 1);
+                    }
+                  } else {
+                    challengerCount = 0;
+                  }
+                }
+              }, 50);
+
+              // Reloj del Metrónomo de Alta Precisión
+              setInterval(() => {
+                if (!isPlaying) return;
+                const now = performance.now();
+                const beatIntervalMs = 60000 / Math.max(40, Math.min(220, detectedBpm));
+                if (now >= nextBeatTime) {
+                  nextBeatTime = now + beatIntervalMs;
+                  currentBeatIndex = (currentBeatIndex + 1) % 4;
+                  for (let i = 0; i < 4; i++) {
+                    const led = document.getElementById(`beat-${i}`);
+                    if (led) {
+                      if (i === currentBeatIndex) {
+                        led.className = i === 0
+                          ? "w-3 h-3 bg-white border border-fuchsia-300 shadow-[0_0_10px_#fff] scale-125 transition-transform"
+                          : "w-3 h-3 bg-fuchsia-400 border border-fuchsia-200 shadow-[0_0_8px_#e879f9] scale-110 transition-transform";
+                      } else {
+                        led.className = "w-3 h-3 bg-purple-950 border border-purple-600/40 transition-transform";
+                      }
+                    }
+                  }
+                  if (metronomeSoundEnabled && audioCtx) {
+                    playMetronomeClick(currentBeatIndex === 0);
+                  }
+                }
+              }, 20);
+
+              function playMetronomeClick(isAccent) {
+                try {
+                  const osc = audioCtx.createOscillator();
+                  const gain = audioCtx.createGain();
+                  osc.type = "triangle";
+                  osc.frequency.setValueAtTime(isAccent ? 1200 : 850, audioCtx.currentTime);
+                  gain.gain.setValueAtTime(0.22, audioCtx.currentTime);
+                  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.045);
+                  osc.connect(gain);
+                  gain.connect(audioCtx.destination);
+                  osc.start(audioCtx.currentTime);
+                  osc.stop(audioCtx.currentTime + 0.05);
+                } catch (e) {}
+              }
+
+              function toggleMetronomeSound() {
+                initAudioEngine();
+                metronomeSoundEnabled = !metronomeSoundEnabled;
+                const btn = document.getElementById("metroSoundBtn");
+                const icon = document.getElementById("metroIcon");
+                if (metronomeSoundEnabled) {
+                  btn.className = "px-2.5 h-7 bg-fuchsia-600 border border-fuchsia-300 text-[10px] text-white font-bold flex items-center gap-1 shadow-[0_0_10px_rgba(217,70,239,0.5)]";
+                  icon.className = "fa-solid fa-volume-high";
+                } else {
+                  btn.className = "px-2.5 h-7 bg-purple-950 border border-purple-600/50 text-[10px] text-purple-200 font-semibold flex items-center gap-1";
+                  icon.className = "fa-solid fa-volume-xmark";
+                }
+              }
+
+              function adjustBpm(delta) {
+                detectedBpm = Math.max(40, Math.min(220, detectedBpm + delta));
+                updateBpmUI();
+              }
+
+              function tapTempo() {
+                const now = performance.now();
+                tapTimes.push(now);
+                if (tapTimes.length > 5) tapTimes.shift();
+                if (tapTimes.length >= 2) {
+                  let sum = 0;
+                  for (let i = 1; i < tapTimes.length; i++) sum += (tapTimes[i] - tapTimes[i - 1]);
+                  const avg = sum / (tapTimes.length - 1);
+                  if (avg > 250 && avg < 1500) {
+                    detectedBpm = Math.round(60000 / avg);
+                    updateBpmUI();
+                  }
+                }
+              }
+
+              function updateBpmUI() {
+                document.getElementById("bpmValueDisplay").textContent = detectedBpm;
+                document.getElementById("miniBpmBadge").textContent = `${detectedBpm} BPM`;
               }
 
               function lockChord(pitch, now) {
                 if(lockedPitch !== -1) prevChordName = formatChord(lockedPitch, lockedQuality);
                 lockedPitch = pitch; lockTime = now; challengerCount = 0;
-                lockedQuality = smoothedChroma[(pitch + 3) % 12] > smoothedChroma[(pitch + 4) % 12] * 1.18 ? "m" : "";
+                const min3 = smoothedChroma[(pitch + 3) % 12];
+                const maj3 = smoothedChroma[(pitch + 4) % 12];
+                lockedQuality = min3 > maj3 * 1.12 ? "m" : "";
                 renderChordUI();
               }
 
               function formatChord(p, q) {
                 if(p < 0) return "--";
-                return chordDetectionMode === "power" ? NOTE_NAMES[p] : NOTE_NAMES[p] + q;
+                return chordDetectionMode === "power" ? NOTE_NAMES[p] + "5" : NOTE_NAMES[p] + q;
               }
 
               function renderChordUI() {
@@ -726,73 +1293,162 @@ jobs:
                 document.getElementById("miniChordBadge").textContent = cur;
                 document.getElementById("currentChordBox").textContent = cur;
                 document.getElementById("prevChordBox").textContent = prevChordName;
-                document.getElementById("nextChordBox").textContent = `${NOTE_NAMES[lockedPitch]}5`;
+                document.getElementById("nextChordBox").textContent = `${NOTE_NAMES[lockedPitch]}5 (${NOTE_NAMES[(lockedPitch + 7) % 12]})`;
               }
 
               function toggleChordMode() {
                 chordDetectionMode = chordDetectionMode === "power" ? "triad" : "power";
-                document.getElementById("chordModeBtn").textContent = chordDetectionMode === "power" ? "Power / Tónica" : "Tríadas";
+                document.getElementById("chordModeBtn").textContent = chordDetectionMode === "power" ? "Power / 5ta" : "Tríadas (m/Maj)";
                 if(lockedPitch !== -1) renderChordUI();
+              }
+
+              function applyEqPreset(name) {
+                const gains = eqPresets[name];
+                if (!gains) return;
+                activePresetName = name;
+                document.getElementById("fullGenreBadge").textContent = `EQ: ${name}`;
+                gains.forEach((val, idx) => {
+                  const slider = document.getElementById(`eq-${idx}`);
+                  if (slider) slider.value = val;
+                  updateEqBand(idx, val);
+                });
+                renderEqButtons();
+              }
+
+              function updateEqBand(index, val) {
+                initAudioEngine();
+                if (eqFilters && eqFilters[index]) {
+                  eqFilters[index].gain.value = parseFloat(val);
+                }
+                const valLabel = document.getElementById(`eq-val-${index}`);
+                if (valLabel) valLabel.textContent = (val > 0 ? "+" : "") + val + "dB";
+              }
+
+              function setImageWithFallback(imgEl, srcUrl) {
+                imgEl.onerror = function() {
+                  this.onerror = function() { this.src = window.defaultLogoDataUri; };
+                  this.src = "ic_launcher.png";
+                };
+                imgEl.src = srcUrl || "ic_launcher.png";
               }
 
               function loadTrack(idx, autoPlay=false) {
                 if(idx < 0 || idx >= tracks.length) return;
                 currentTrackIndex = idx; const t = tracks[idx];
-                lockedPitch = -1; prevChordName = "--";
-                document.getElementById("miniCover").src = t.cover; document.getElementById("miniTitle").textContent = t.title; document.getElementById("miniArtist").textContent = t.artist;
-                document.getElementById("fullCover").src = t.cover; document.getElementById("fullTitle").textContent = t.title; document.getElementById("fullArtist").textContent = t.artist;
+                lockedPitch = -1; prevChordName = "--"; onsetIntervals = [];
+                setImageWithFallback(document.getElementById("miniCover"), t.cover);
+                setImageWithFallback(document.getElementById("fullCover"), t.cover);
+                document.getElementById("miniTitle").textContent = t.title;
+                document.getElementById("miniArtist").textContent = t.artist;
+                document.getElementById("fullTitle").textContent = t.title;
+                document.getElementById("fullArtist").textContent = t.artist;
                 document.getElementById("fullAlbumName").textContent = t.album;
-                audioEl.src = t.audioUrl; audioEl.load(); renderLibrary(); notifyNativeAndroidService();
+                audioEl.src = t.audioUrl;
+                audioEl.load();
+                renderLibrary();
+                notifyNativeAndroidService();
                 if(autoPlay) playAudio();
               }
 
-              function togglePlay() { 
-                if(!tracks.length) { rescanPhoneLibrary(); return; } 
-                initAudioEngine(); 
-                isPlaying ? pauseAudio() : playAudio(); 
-              }
-
-              function playAudio() { 
-                isPlaying = true; 
+              function togglePlay() {
+                if(!tracks.length) { rescanPhoneLibrary(); return; }
                 initAudioEngine();
-                updatePlayButtons(true); 
-                audioEl.play().catch(()=>{}); 
-                notifyNativeAndroidService(); 
+                isPlaying ? pauseAudio() : playAudio();
               }
 
-              function pauseAudio() { 
-                isPlaying = false; 
-                updatePlayButtons(false); 
-                audioEl.pause(); 
-                notifyNativeAndroidService(); 
+              function playAudio() {
+                initAudioEngine();
+                isPlaying = true;
+                nextBeatTime = performance.now();
+                updatePlayButtons(true);
+                audioEl.play().catch(()=>{});
+                notifyNativeAndroidService();
+              }
+
+              function pauseAudio() {
+                isPlaying = false;
+                updatePlayButtons(false);
+                audioEl.pause();
+                notifyNativeAndroidService();
               }
 
               function updatePlayButtons(p) {
                 const icon = p ? '<i class="fa-solid fa-pause"></i>' : '<i class="fa-solid fa-play"></i>';
-                document.getElementById("miniPlayBtn").innerHTML = icon; document.getElementById("fullPlayBtn").innerHTML = icon;
+                document.getElementById("miniPlayBtn").innerHTML = icon;
+                document.getElementById("fullPlayBtn").innerHTML = icon;
               }
+
               function prevTrack() { if(tracks.length) loadTrack((currentTrackIndex - 1 + tracks.length) % tracks.length, true); }
-              function nextTrack() { if(tracks.length) loadTrack((currentTrackIndex + 1) % tracks.length, true); }
-              
+              function nextTrack() {
+                if(!tracks.length) return;
+                if(repeatMode === 2) { audioEl.currentTime = 0; playAudio(); return; }
+                const nextIdx = shuffleMode ? Math.floor(Math.random() * tracks.length) : (currentTrackIndex + 1) % tracks.length;
+                loadTrack(nextIdx, true);
+              }
+
+              function toggleShuffle() {
+                shuffleMode = !shuffleMode;
+                document.getElementById("shuffleBtn").className = shuffleMode
+                  ? "w-10 h-10 flex items-center justify-center text-fuchsia-400"
+                  : "w-10 h-10 flex items-center justify-center text-purple-400/50";
+              }
+
+              function cycleRepeat() {
+                repeatMode = (repeatMode + 1) % 3;
+                const btn = document.getElementById("repeatBtn");
+                const badge = document.getElementById("repeatOneBadge");
+                btn.className = repeatMode > 0
+                  ? "w-10 h-10 flex items-center justify-center text-fuchsia-400 relative"
+                  : "w-10 h-10 flex items-center justify-center text-purple-400/50 relative";
+                badge.classList.toggle("hidden", repeatMode !== 2);
+              }
+
+              audioEl.addEventListener("Play", () => initAudioEngine());
               audioEl.addEventListener("timeupdate", () => updateTimeUI(audioEl.currentTime, audioEl.duration || 0));
+              audioEl.addEventListener("loadedmetadata", () => notifyNativeAndroidService());
               audioEl.addEventListener("ended", nextTrack);
-              function seekAudio(val) { if(audioEl.duration) audioEl.currentTime = (val/100)*audioEl.duration; }
+
+              function seekAudio(val) {
+                if(audioEl.duration) {
+                  audioEl.currentTime = (val / 100) * audioEl.duration;
+                  notifyNativeAndroidService();
+                }
+              }
+
+              window.seekToMs = function(ms) {
+                audioEl.currentTime = ms / 1000;
+                notifyNativeAndroidService();
+              };
+
               function updateTimeUI(cur, tot) {
                 const fmt = s => `${Math.floor(s/60)}:${Math.floor(s%60)<10?'0':''}${Math.floor(s%60)}`;
-                document.getElementById("miniSeek").value = tot ? (cur/tot)*100 : 0; document.getElementById("fullSeek").value = tot ? (cur/tot)*100 : 0;
-                document.getElementById("miniCurrentTime").textContent = fmt(cur); document.getElementById("fullCurrentTime").textContent = fmt(cur);
-                document.getElementById("miniDuration").textContent = fmt(tot); document.getElementById("fullDuration").textContent = fmt(tot);
+                document.getElementById("miniSeek").value = tot ? (cur/tot)*100 : 0;
+                document.getElementById("fullSeek").value = tot ? (cur/tot)*100 : 0;
+                document.getElementById("miniCurrentTime").textContent = fmt(cur);
+                document.getElementById("fullCurrentTime").textContent = fmt(cur);
+                document.getElementById("miniDuration").textContent = fmt(tot);
+                document.getElementById("fullDuration").textContent = fmt(tot);
+              }
+
+              function setSleepTimer(mins) {
+                if (sleepTimerId) { clearTimeout(sleepTimerId); sleepTimerId = null; }
+                const label = document.getElementById("timerText");
+                if (mins > 0) {
+                  label.textContent = `${mins}m`;
+                  sleepTimerId = setTimeout(() => { pauseAudio(); label.textContent = "Off"; }, mins * 60000);
+                } else {
+                  label.textContent = "Off";
+                }
+                closeModal("timerModal");
               }
 
               function switchTab(tab) {
                 currentTab = tab;
                 ["songs", "artists", "albums", "playlists"].forEach(t => {
                   const btn = document.getElementById(`tab-${t}`);
-                  if(t === tab) {
-                    btn.className = "px-4 py-1.5 rounded-xl text-xs font-medium bg-gradient-to-r from-purple-700 to-fuchsia-600 text-white shadow-md shadow-purple-900/50 border border-fuchsia-400/30 whitespace-nowrap";
-                  } else {
-                    btn.className = "px-4 py-1.5 rounded-xl text-xs font-medium bg-purple-950/50 text-purple-300/80 border border-purple-800/40 whitespace-nowrap";
-                  }
+                  btn.className = t === tab
+                    ? "px-4 py-1.5 text-xs font-semibold bg-gradient-to-r from-purple-700 to-fuchsia-600 text-white border border-fuchsia-400/40 whitespace-nowrap"
+                    : "px-4 py-1.5 text-xs font-medium bg-purple-950/60 text-purple-300/80 border border-purple-800/40 whitespace-nowrap";
                 });
                 renderLibrary();
               }
@@ -804,7 +1460,7 @@ jobs:
                 container.innerHTML = "";
 
                 if(tracks.length === 0) {
-                  container.innerHTML = `<div class="glass-card rounded-2xl p-8 text-center my-6 border border-purple-700/30"><h3 class="text-sm font-semibold text-white mb-1">Escaneando Dispositivo...</h3><button onclick="rescanPhoneLibrary()" class="mt-3 px-5 py-2.5 rounded-xl bg-purple-700 text-white text-xs font-bold">Escanear Memoria</button></div>`;
+                  container.innerHTML = `<div class="glass-card p-8 text-center my-6 border border-purple-700/30"><h3 class="text-sm font-semibold text-white mb-1">Escaneando Memoria...</h3><button onclick="rescanPhoneLibrary()" class="mt-3 px-5 py-2.5 bg-purple-700 text-white text-xs font-bold">Escanear Dispositivo</button></div>`;
                   return;
                 }
 
@@ -823,17 +1479,17 @@ jobs:
                     const idx = tracks.indexOf(track);
                     const isCur = idx === currentTrackIndex;
                     const div = document.createElement("div");
-                    div.className = `p-2.5 rounded-xl flex items-center justify-between gap-3 cursor-pointer transition ${isCur ? "bg-purple-900/60 border border-fuchsia-400/60 shadow-[0_0_15px_rgba(217,70,239,0.2)]" : "glass-card hover:bg-purple-900/20"}`;
-                    div.innerHTML = `<div class="flex items-center gap-3 min-w-0 flex-1" onclick="loadTrack(${idx}, true)"><img src="${track.cover}" class="w-11 h-11 rounded-lg object-cover border border-purple-500/30 shrink-0" /><div class="min-w-0 flex-1"><h4 class="text-sm font-semibold ${isCur?"text-fuchsia-300":"text-white"} truncate">${track.title}</h4><p class="text-xs text-purple-300/65 truncate">${track.artist} • ${track.album}</p></div></div><button onclick="currentTrackIndex=${idx};openEditModal();" class="p-2 text-purple-300/70 hover:text-white"><i class="fa-solid fa-pen text-xs"></i></button>`;
+                    div.className = `p-2.5 flex items-center justify-between gap-3 cursor-pointer transition ${isCur ? "bg-purple-900/65 border border-fuchsia-400/70 shadow-[0_0_15px_rgba(217,70,239,0.25)]" : "glass-card hover:bg-purple-900/20"}`;
+                    div.innerHTML = `<div class="flex items-center gap-3 min-w-0 flex-1" onclick="loadTrack(${idx}, true)"><img src="${track.cover}" onerror="this.onerror=null;this.src='ic_launcher.png';" class="w-12 h-12 sharp-cover object-cover shrink-0" /><div class="min-w-0 flex-1"><h4 class="text-sm font-semibold ${isCur?"text-fuchsia-300":"text-white"} truncate">${track.title}</h4><p class="text-xs text-purple-300/70 truncate">${track.artist} • ${track.album}</p></div></div><button onclick="currentTrackIndex=${idx};openEditModal();" class="p-2 text-purple-300/70 hover:text-white"><i class="fa-solid fa-pen text-xs"></i></button>`;
                     container.appendChild(div);
                   });
                 } else if(currentTab === "artists") {
                   [...new Set(filtered.map(t => t.artist))].forEach(artist => {
                     const artistTracks = tracks.filter(t => t.artist === artist);
                     const div = document.createElement("div");
-                    div.className = `glass-card p-3 rounded-xl flex items-center justify-between cursor-pointer`;
+                    div.className = `glass-card p-3 flex items-center justify-between cursor-pointer`;
                     div.onclick = () => renderLibrary("artist", artist);
-                    div.innerHTML = `<div class="flex items-center gap-3"><img src="${artistTracks[0]?.cover}" class="w-10 h-10 rounded-full object-cover border border-purple-500/40" /><div><h4 class="text-sm font-semibold text-white">${artist}</h4><p class="text-xs text-purple-300/65">${artistTracks.length} pistas</p></div></div><i class="fa-solid fa-chevron-right text-purple-400 text-xs"></i>`;
+                    div.innerHTML = `<div class="flex items-center gap-3"><img src="${artistTracks[0]?.cover}" onerror="this.onerror=null;this.src='ic_launcher.png';" class="w-12 h-12 sharp-cover object-cover" /><div><h4 class="text-sm font-semibold text-white">${artist}</h4><p class="text-xs text-purple-300/65">${artistTracks.length} pistas</p></div></div><i class="fa-solid fa-chevron-right text-purple-400 text-xs"></i>`;
                     container.appendChild(div);
                   });
                 } else if(currentTab === "albums") {
@@ -841,14 +1497,14 @@ jobs:
                   [...new Set(filtered.map(t => t.album))].forEach(album => {
                     const sample = tracks.find(t => t.album === album);
                     const card = document.createElement("div");
-                    card.className = "glass-card p-3 rounded-xl cursor-pointer";
+                    card.className = "glass-card p-3 cursor-pointer";
                     card.onclick = () => renderLibrary("album", album);
-                    card.innerHTML = `<img src="${sample.cover}" class="w-full aspect-square object-cover rounded-xl mb-2 border border-purple-500/30" /><h4 class="text-xs font-semibold text-white truncate">${album}</h4><p class="text-[11px] text-purple-300/70 truncate">${sample.artist}</p>`;
+                    card.innerHTML = `<img src="${sample.cover}" onerror="this.onerror=null;this.src='ic_launcher.png';" class="w-full aspect-square sharp-cover object-cover mb-2" /><h4 class="text-xs font-semibold text-white truncate">${album}</h4><p class="text-[11px] text-purple-300/70 truncate">${sample.artist}</p>`;
                     grid.appendChild(card);
                   });
                   container.appendChild(grid);
                 } else if(currentTab === "playlists") {
-                  container.innerHTML = `<div class="glass-card p-6 text-center text-xs text-purple-300 rounded-xl">Sección de Playlists Activa</div>`;
+                  container.innerHTML = `<div class="glass-card p-6 text-center text-xs text-purple-300">Todas tus pistas activas (${tracks.length} canciones listas)</div>`;
                 }
               }
 
@@ -868,7 +1524,7 @@ jobs:
                 const coverFile = document.getElementById("editCoverFile").files[0];
                 const save = () => {
                   customOverrides[t.id] = { title: t.title, artist: t.artist, album: t.album, cover: t.cover };
-                  localStorage.setItem("cosmos_overrides_v11", JSON.stringify(customOverrides));
+                  localStorage.setItem("cosmos_overrides_v12", JSON.stringify(customOverrides));
                   loadTrack(currentTrackIndex, isPlaying);
                 };
                 if(coverFile) {
@@ -884,8 +1540,27 @@ jobs:
 
               window.addEventListener("DOMContentLoaded", () => {
                 const c = document.getElementById("chromaBars");
-                for(let i=0; i<12; i++) c.innerHTML += `<div id="chroma-bar-${i}" class="bg-gradient-to-t from-purple-700 via-fuchsia-400 to-white rounded-t transition-all duration-100" style="height:10%"></div>`;
+                for(let i=0; i<12; i++) {
+                  const bar = document.createElement("div");
+                  bar.id = `chroma-bar-${i}`;
+                  bar.className = "bg-gradient-to-t from-purple-700 via-fuchsia-400 to-white h-full w-full chroma-bar-gpu";
+                  bar.style.transform = "scaleY(0.12)";
+                  c.appendChild(bar);
+                  chromaBarEls.push(bar);
+                }
+                renderEqButtons();
                 rescanPhoneLibrary();
+
+                // Animación del Splash Screen al iniciar
+                const splash = document.getElementById("welcomeSplash");
+                const bar = document.getElementById("splashBar");
+                setTimeout(() => { if(bar) bar.style.width = "100%"; }, 100);
+                setTimeout(() => {
+                  if(splash) {
+                    splash.style.opacity = "0";
+                    setTimeout(() => splash.remove(), 700);
+                  }
+                }, 2200);
               });
             </script>
           </body>
