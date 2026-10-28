@@ -35,7 +35,7 @@ jobs:
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
           echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
 
-      - name: Ensamblar Motor Nativo y UI Maestra de COSMOS
+      - name: Ensamblar COSMOS 2027 Flagship Edition
         run: |
           mkdir -p app/src/main/java/com/belmont/cosmos
           mkdir -p app/src/main/assets
@@ -43,7 +43,7 @@ jobs:
           mkdir -p app/src/main/res/drawable
           mkdir -p app/src/main/res/mipmap-xxhdpi
 
-          # Copiar tus imagenes reales tanto a recursos nativos como a assets del WebView
+          # Copiar tus imagenes reales a recursos nativos y assets
           if [ -f "ic_launcher.png" ]; then
             cp ic_launcher.png app/src/main/res/drawable/ic_launcher.png
             cp ic_launcher.png app/src/main/res/mipmap-xxhdpi/ic_launcher.png
@@ -62,7 +62,7 @@ jobs:
             cp app/src/main/res/drawable/splash_bg.png app/src/main/assets/splash_bg.png
           fi
 
-          # ICONOS VECTORIALES MODERNOS ESTILO SPOTIFY PARA LA NOTIFICACION
+          # ICONOS VECTORIALES DE ALTA GAMA PARA NOTIFICACION MULTIMEDIA
           cat << 'EOF' > app/src/main/res/drawable/ic_cosmos_notif.xml
           <vector xmlns:android="http://schemas.android.com/apk/res/android"
               android:width="24dp"
@@ -162,8 +162,8 @@ jobs:
                   applicationId "com.belmont.cosmos"
                   minSdk 26
                   targetSdk 34
-                  versionCode 2
-                  versionName "2.0"
+                  versionCode 3
+                  versionName "3.0-2027"
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
@@ -178,14 +178,20 @@ jobs:
           }
           EOF
 
+          # MANIFIESTO CON PERMISOS DE WAKE_LOCK, BLUETOOTH Y FOREGROUND SERVICE MEDIA PLAYBACK
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.WAKE_LOCK" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+              <uses-permission android:name="android.permission.BLUETOOTH" />
+              <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
               <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
               <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
               <application
                   android:label="COSMOS"
                   android:icon="@mipmap/ic_launcher"
@@ -193,20 +199,88 @@ jobs:
                   android:theme="@style/Theme.CosmosSplash"
                   android:hardwareAccelerated="true"
                   android:usesCleartextTraffic="true">
+
                   <activity
                       android:name=".MainActivity"
                       android:exported="true"
+                      android:launchMode="singleTask"
                       android:configChanges="orientation|screenSize|keyboardHidden">
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
                           <category android:name="android.intent.category.LAUNCHER" />
                       </intent-filter>
                   </activity>
+
+                  <service
+                      android:name=".CosmosPlaybackService"
+                      android:enabled="true"
+                      android:exported="false"
+                      android:foregroundServiceType="mediaPlayback" />
               </application>
           </manifest>
           EOF
 
-          # KOTLIN MAINACTIVITY CON STREAMING RANGE 206 SIN LAG Y NOTIFICACION SPOTIFY/SUNO
+          # SERVICIO EN PRIMER PLANO CON WAKELOCK PARA QUE NUNCA SE CORTE EN BLUETOOTH
+          cat << 'EOF' > app/src/main/java/com/belmont/cosmos/CosmosPlaybackService.kt
+          package com.belmont.cosmos
+
+          import android.app.Notification
+          import android.app.Service
+          import android.content.Context
+          import android.content.Intent
+          import android.content.pm.ServiceInfo
+          import android.os.Build
+          import android.os.IBinder
+          import android.os.PowerManager
+
+          class CosmosPlaybackService : Service() {
+              private var wakeLock: PowerManager.WakeLock? = null
+
+              override fun onCreate() {
+                  super.onCreate()
+                  val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+                  wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Cosmos::BluetoothMediaWakeLock").apply {
+                      setReferenceCounted(false)
+                  }
+              }
+
+              override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+                  val isPlaying = intent?.getBooleanExtra("IS_PLAYING", true) ?: true
+                  if (isPlaying) {
+                      if (wakeLock?.isHeld == false) {
+                          wakeLock?.acquire(6 * 60 * 60 * 1000L) // Hasta 6 horas continuas en Bluetooth
+                      }
+                  } else {
+                      if (wakeLock?.isHeld == true) {
+                          wakeLock?.release()
+                      }
+                  }
+
+                  val notif: Notification? = MainActivity.latestNotification
+                  if (notif != null) {
+                      try {
+                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                              startForeground(777, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+                          } else {
+                              startForeground(777, notif)
+                          }
+                      } catch (_: Exception) {}
+                  }
+                  return START_STICKY
+              }
+
+              override fun onDestroy() {
+                  if (wakeLock?.isHeld == true) {
+                      wakeLock?.release()
+                  }
+                  super.onDestroy()
+              }
+
+              override fun onBind(intent: Intent?): IBinder? = null
+          }
+          EOF
+
+          # MAINACTIVITY CON KEEP-ALIVE WEBVIEW, AUDIOFOCUS, BLUETOOTH Y COMPARTIR ARCHIVOS
           cat << 'EOF' > app/src/main/java/com/belmont/cosmos/MainActivity.kt
           package com.belmont.cosmos
 
@@ -215,6 +289,8 @@ jobs:
           import android.app.NotificationChannel
           import android.app.NotificationManager
           import android.app.PendingIntent
+          import android.bluetooth.BluetoothAdapter
+          import android.bluetooth.BluetoothDevice
           import android.content.BroadcastReceiver
           import android.content.ContentUris
           import android.content.Context
@@ -229,6 +305,9 @@ jobs:
           import android.graphics.Paint
           import android.graphics.Shader
           import android.graphics.drawable.Icon
+          import android.media.AudioAttributes
+          import android.media.AudioFocusRequest
+          import android.media.AudioManager
           import android.media.MediaMetadata
           import android.media.session.MediaSession
           import android.media.session.PlaybackState
@@ -252,10 +331,23 @@ jobs:
           import java.io.BufferedInputStream
           import java.io.FileInputStream
 
+          // WebView especial que jamas entra en suspension cuando apagas la pantalla en Bluetooth
+          class CosmosKeepAliveWebView(context: Context) : WebView(context) {
+              override fun onWindowVisibilityChanged(visibility: Int) {
+                  super.onWindowVisibilityChanged(View.VISIBLE)
+              }
+          }
+
           class MainActivity : ComponentActivity() {
-              private lateinit var webView: WebView
+              companion object {
+                  var latestNotification: Notification? = null
+              }
+
+              private lateinit var webView: CosmosKeepAliveWebView
               private var mediaSession: MediaSession? = null
-              private val CHANNEL_ID = "cosmos_pro_media_channel"
+              private lateinit var audioManager: AudioManager
+              private var focusRequest: AudioFocusRequest? = null
+              private val CHANNEL_ID = "cosmos_2027_media_channel"
               private var fallbackCosmosArt: Bitmap? = null
 
               private val mediaActionReceiver = object : BroadcastReceiver() {
@@ -264,6 +356,10 @@ jobs:
                           "COSMOS_PREV" -> webView.evaluateJavascript("prevTrack();", null)
                           "COSMOS_TOGGLE" -> webView.evaluateJavascript("togglePlay();", null)
                           "COSMOS_NEXT" -> webView.evaluateJavascript("nextTrack();", null)
+                          AudioManager.ACTION_AUDIO_BECOMING_NOISY -> {
+                              // Solo pausa si se desconectan los audifonos fisicos de golpe
+                              webView.evaluateJavascript("pauseAudio();", null)
+                          }
                       }
                   }
               }
@@ -272,10 +368,11 @@ jobs:
                   super.onCreate(savedInstanceState)
                   window.statusBarColor = Color.parseColor("#040109")
                   window.navigationBarColor = Color.parseColor("#040109")
+                  audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
                   fallbackCosmosArt = createCosmosPurpleArtwork()
                   setupMediaSessionAndChannel()
 
-                  webView = WebView(this)
+                  webView = CosmosKeepAliveWebView(this)
                   webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
                   setContentView(webView)
 
@@ -311,7 +408,32 @@ jobs:
                   webView.loadUrl("file:///android_asset/index.html")
               }
 
-              // Streaming de alta velocidad con soporte HTTP 206 Range para eliminar lag de audio
+              private fun requestCosmosAudioFocus() {
+                  val attrs = AudioAttributes.Builder()
+                      .setUsage(AudioAttributes.USAGE_MEDIA)
+                      .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                      .build()
+
+                  focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                      .setAudioAttributes(attrs)
+                      .setAcceptsDelayedFocusGain(true)
+                      .setWillPauseWhenDucked(false)
+                      .setOnAudioFocusChangeListener { change ->
+                          when (change) {
+                              AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                                  // Baja ligeramente el volumen en notificaciones sin cortar la musica en Bluetooth
+                                  webView.evaluateJavascript("setDuckVolume(0.35);", null)
+                              }
+                              AudioManager.AUDIOFOCUS_GAIN -> {
+                                  webView.evaluateJavascript("setDuckVolume(1.0);", null)
+                              }
+                          }
+                      }
+                      .build()
+
+                  focusRequest?.let { audioManager.requestAudioFocus(it) }
+              }
+
               private fun serveAudioStreamWithRange(uri: Uri, headers: Map<String, String>?): WebResourceResponse? {
                   return try {
                       val pfd = contentResolver.openFileDescriptor(uri, "r") ?: return null
@@ -392,11 +514,10 @@ jobs:
                           contentResolver.openInputStream(artUri)?.use { stream ->
                               val decoded = BitmapFactory.decodeStream(stream)
                               if (decoded != null) {
-                                  // Mezclar sutilmente con atmósfera morada de COSMOS para la notificación
                                   val copy = decoded.copy(Bitmap.Config.ARGB_8888, true)
                                   val c = Canvas(copy)
                                   val p = Paint()
-                                  p.color = Color.argb(48, 126, 34, 206)
+                                  p.color = Color.argb(45, 126, 34, 206)
                                   c.drawRect(0f, 0f, copy.width.toFloat(), copy.height.toFloat(), p)
                                   return copy
                               }
@@ -407,13 +528,13 @@ jobs:
               }
 
               private fun setupMediaSessionAndChannel() {
-                  val channel = NotificationChannel(CHANNEL_ID, "COSMOS Audio Engine", NotificationManager.IMPORTANCE_LOW).apply {
-                      description = "Controles multimedia de COSMOS Belmont Edition"
+                  val channel = NotificationChannel(CHANNEL_ID, "COSMOS 2027 Audio Engine", NotificationManager.IMPORTANCE_LOW).apply {
+                      description = "Reproduccion continua Bluetooth y controles de COSMOS"
                       setShowBadge(false)
                   }
                   getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
 
-                  mediaSession = MediaSession(this, "CosmosBelmontProSession").apply {
+                  mediaSession = MediaSession(this, "CosmosBelmont2027Session").apply {
                       setCallback(object : MediaSession.Callback() {
                           override fun onPlay() { runOnUiThread { webView.evaluateJavascript("playAudio();", null) } }
                           override fun onPause() { runOnUiThread { webView.evaluateJavascript("pauseAudio();", null) } }
@@ -425,7 +546,10 @@ jobs:
                   }
 
                   val filter = IntentFilter().apply {
-                      addAction("COSMOS_PREV"); addAction("COSMOS_TOGGLE"); addAction("COSMOS_NEXT")
+                      addAction("COSMOS_PREV")
+                      addAction("COSMOS_TOGGLE")
+                      addAction("COSMOS_NEXT")
+                      addAction(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
                   }
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                       registerReceiver(mediaActionReceiver, filter, Context.RECEIVER_EXPORTED)
@@ -485,6 +609,7 @@ jobs:
                               val durationMs = cursor.getLong(durCol)
                               arr.put(JSONObject().apply {
                                   put("id", "ms_$id")
+                                  put("mediaId", id)
                                   put("title", cursor.getString(titleCol) ?: "Pista")
                                   put("artist", cursor.getString(artistCol) ?: "Edward Belmont")
                                   put("album", cursor.getString(albumCol) ?: "COSMOS")
@@ -502,11 +627,40 @@ jobs:
 
               inner class CosmosBridge {
                   @JavascriptInterface fun rescanMediaStore() { runOnUiThread { checkPermissionsAndScan() } }
+
                   @JavascriptInterface fun updateNotification(title: String, artist: String, album: String, albumId: Long, durationMs: Long, positionMs: Long, isPlaying: Boolean) {
+                      if (isPlaying) {
+                          requestCosmosAudioFocus()
+                      }
                       Thread {
                           val artBitmap = loadAlbumArtBitmap(albumId)
                           runOnUiThread { showMediaNotification(title, artist, album, artBitmap, durationMs, positionMs, isPlaying) }
                       }.start()
+                  }
+
+                  @JavascriptInterface fun shareTrackNative(mediaId: Long, title: String, artist: String, album: String) {
+                      runOnUiThread {
+                          try {
+                              val shareIntent = Intent(Intent.ACTION_SEND)
+                              if (mediaId > 0) {
+                                  val contentUri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, mediaId)
+                                  shareIntent.type = "audio/*"
+                                  shareIntent.putExtra(Intent.EXTRA_STREAM, contentUri)
+                                  shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                              } else {
+                                  shareIntent.type = "text/plain"
+                              }
+                              shareIntent.putExtra(Intent.EXTRA_SUBJECT, "$title - $artist")
+                              shareIntent.putExtra(Intent.EXTRA_TEXT, "🎵 Escuchando \"$title\" de $artist ($album) en COSMOS • Belmont Edition")
+                              startActivity(Intent.createChooser(shareIntent, "Compartir canción desde COSMOS"))
+                          } catch (e: Exception) {
+                              val fallback = Intent(Intent.ACTION_SEND).apply {
+                                  type = "text/plain"
+                                  putExtra(Intent.EXTRA_TEXT, "🎵 Escuchando \"$title\" de $artist ($album) en COSMOS • Belmont Edition")
+                              }
+                              startActivity(Intent.createChooser(fallback, "Compartir canción"))
+                          }
+                      }
                   }
               }
 
@@ -549,7 +703,7 @@ jobs:
                       .setMediaSession(mediaSession?.sessionToken)
                       .setShowActionsInCompactView(0, 1, 2)
 
-                  val builder = Notification.Builder(this, CHANNEL_ID)
+                  val notification = Notification.Builder(this, CHANNEL_ID)
                       .setSmallIcon(R.drawable.ic_cosmos_notif)
                       .setLargeIcon(artBitmap)
                       .setContentTitle(title)
@@ -564,8 +718,29 @@ jobs:
                       .addAction(playAction)
                       .addAction(nextAction)
                       .setStyle(mediaStyle)
+                      .build()
 
-                  getSystemService(NotificationManager::class.java).notify(777, builder.build())
+                  latestNotification = notification
+                  getSystemService(NotificationManager::class.java).notify(777, notification)
+
+                  // Iniciar y mantener vivo el ForegroundService para que Bluetooth jamas se corte
+                  val serviceIntent = Intent(this, CosmosPlaybackService::class.java).apply {
+                      putExtra("IS_PLAYING", isPlaying)
+                  }
+                  try {
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                          startForegroundService(serviceIntent)
+                      } else {
+                          startService(serviceIntent)
+                      }
+                  } catch (_: Exception) {}
+              }
+
+              // Evitar que Android pause el motor de audio del WebView cuando la app pasa a segundo plano
+              override fun onPause() {
+                  super.onPause()
+                  webView.onResume()
+                  webView.resumeTimers()
               }
 
               override fun onDestroy() {
@@ -576,7 +751,7 @@ jobs:
           }
           EOF
 
-          # INTERFAZ HTML MAESTRA REESTRUCTURADA (SPLASH ANIMADO, TEXTURA COSMICA, PORTADAS CUADRADAS, METRONOMO BPM Y DSP SIN LAG)
+          # INTERFAZ 2027 FLAGSHIP (APPLE MUSIC + SPOTIFY + DEEZER AESTHETIC, LONG-PRESS, SHARE, PLAYLISTS, LIKES)
           cat << 'EOF' > app/src/main/assets/index.html
           <!DOCTYPE html>
           <html lang="es">
@@ -584,11 +759,11 @@ jobs:
             <meta charset="UTF-8" />
             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
             <meta name="theme-color" content="#040109" />
-            <title>COSMOS</title>
+            <title>COSMOS 2027</title>
             <script src="https://cdn.tailwindcss.com"></script>
             <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
             <style>
-              @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Montserrat:wght@200;300;400;600;700&family=Inter:wght@300;400;500;600;700&display=swap');
+              @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Montserrat:wght@200;300;400;600&display=swap');
 
               :root {
                 --bg-void: #040109;
@@ -598,31 +773,30 @@ jobs:
 
               body {
                 background-color: var(--bg-void);
-                color: #f3e8ff;
-                font-family: 'Inter', sans-serif;
+                color: #f5f0ff;
+                font-family: 'Plus Jakarta Sans', sans-serif;
                 overflow-x: hidden;
                 user-select: none;
+                -webkit-user-select: none;
+                -webkit-touch-callout: none;
                 -webkit-tap-highlight-color: transparent;
               }
 
-              /* TEXTURA DE FONDO MULTICAPA COSMICA + MALLA SUTIL */
+              /* ATMOSFERA 2027 AURORA FLUIDA + MALLA COSMICA */
               .cosmos-bg {
                 background-color: #040109;
                 background-image:
-                  radial-gradient(circle at 50% -5%, rgba(168, 85, 247, 0.36) 0%, transparent 55%),
-                  radial-gradient(circle at 90% 45%, rgba(217, 70, 239, 0.16) 0%, transparent 45%),
-                  radial-gradient(circle at 10% 80%, rgba(126, 34, 206, 0.22) 0%, transparent 50%),
-                  linear-gradient(rgba(192, 132, 252, 0.03) 1px, transparent 1px),
-                  linear-gradient(90deg, rgba(192, 132, 252, 0.03) 1px, transparent 1px),
-                  radial-gradient(rgba(255, 255, 255, 0.10) 1px, transparent 0);
-                background-size: 100% 100%, 100% 100%, 100% 100%, 28px 28px, 28px 28px, 90px 90px;
-                background-position: 0 0, 0 0, 0 0, 0 0, 0 0, 15px 25px;
+                  radial-gradient(circle at 18% 0%, rgba(192, 38, 211, 0.28) 0%, transparent 48%),
+                  radial-gradient(circle at 85% 12%, rgba(124, 58, 237, 0.32) 0%, transparent 52%),
+                  radial-gradient(circle at 50% 65%, rgba(217, 70, 239, 0.14) 0%, transparent 55%),
+                  radial-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 0);
+                background-size: 100% 100%, 100% 100%, 100% 100%, 64px 64px;
               }
 
               .digital-cosmos {
                 font-family: 'Share Tech Mono', monospace;
                 letter-spacing: 0.28em;
-                text-shadow: 0 0 14px rgba(217, 70, 239, 0.85), 0 0 26px rgba(147, 51, 234, 0.6);
+                text-shadow: 0 0 16px rgba(217, 70, 239, 0.85), 0 0 28px rgba(147, 51, 234, 0.6);
               }
 
               .belmont-thin {
@@ -631,46 +805,59 @@ jobs:
                 letter-spacing: 0.36em;
               }
 
-              .glass-card {
-                background: rgba(15, 6, 28, 0.90);
-                border: 1px solid rgba(192, 132, 252, 0.24);
-                box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
+              /* TARJETAS DE CRISTAL LIQUIDO 2027 (ESTILO APPLE MUSIC / SPOTIFY) */
+              .glass-2027 {
+                background: linear-gradient(145deg, rgba(28, 12, 52, 0.72) 0%, rgba(11, 4, 22, 0.88) 100%);
+                backdrop-filter: blur(24px);
+                -webkit-backdrop-filter: blur(24px);
+                border: 1px solid rgba(232, 121, 249, 0.18);
+                box-shadow: 0 12px 32px -4px rgba(0, 0, 0, 0.55), inset 0 1px 0 0 rgba(255, 255, 255, 0.10);
+              }
+
+              .glass-pill {
+                background: rgba(24, 10, 44, 0.75);
+                backdrop-filter: blur(20px);
+                border: 1px solid rgba(192, 132, 252, 0.22);
               }
 
               .neon-chord-box {
-                background: linear-gradient(160deg, rgba(107, 33, 168, 0.72) 0%, rgba(10, 4, 20, 0.98) 100%);
-                border: 1.5px solid #e879f9;
-                box-shadow: 0 0 25px rgba(217, 70, 239, 0.45), inset 0 0 12px rgba(192, 132, 252, 0.3);
+                background: linear-gradient(160deg, rgba(126, 34, 206, 0.68) 0%, rgba(15, 5, 29, 0.96) 100%);
+                border: 1.5px solid #f0abfc;
+                box-shadow: 0 0 28px rgba(217, 70, 239, 0.45), inset 0 0 14px rgba(240, 171, 252, 0.25);
               }
 
-              /* PORTADAS CUADRADAS SIN BORDES REDONDOS CON MARCO FINO */
-              .sharp-cover {
-                border-radius: 0px !important;
-                border: 1px solid rgba(216, 180, 254, 0.35);
-                box-shadow: 0 12px 35px rgba(0, 0, 0, 0.75), 0 0 18px rgba(168, 85, 247, 0.22);
+              /* PORTADAS CON SQUIRCLE SUAVE Y HALO DE LUZ ESTILO APPLE MUSIC */
+              .cover-2027 {
+                border-radius: 22px;
+                border: 1px solid rgba(255, 255, 255, 0.16);
+                box-shadow: 0 20px 45px -10px rgba(0, 0, 0, 0.8), 0 0 30px rgba(192, 38, 211, 0.28);
               }
 
-              /* ANIMACIONES DEL SPLASH SCREEN DE BIENVENIDA */
+              .cover-row {
+                border-radius: 14px;
+                border: 1px solid rgba(232, 121, 249, 0.22);
+              }
+
               @keyframes letterGlow {
                 0% { opacity: 0.1; text-shadow: none; transform: translateY(6px) scale(0.95); }
                 50% { opacity: 1; color: #ffffff; text-shadow: 0 0 20px #e879f9, 0 0 38px #a855f7; transform: translateY(0) scale(1.04); }
                 100% { opacity: 1; color: #f3e8ff; text-shadow: 0 0 12px #d946ef, 0 0 24px #7e22ce; transform: translateY(0) scale(1); }
               }
 
-              @keyframes pulseAura {
-                0%, 100% { filter: drop-shadow(0 0 16px rgba(217, 70, 239, 0.6)); transform: scale(1); }
-                50% { filter: drop-shadow(0 0 32px rgba(232, 121, 249, 0.95)); transform: scale(1.04); }
+              @keyframes floatAmbient {
+                0%, 100% { transform: scale(1) rotate(0deg); opacity: 0.55; }
+                50% { transform: scale(1.12) rotate(4deg); opacity: 0.80; }
               }
 
-              .splash-letter {
-                display: inline-block;
-                opacity: 0.1;
-                animation: letterGlow 0.9s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+              @keyframes heartPop {
+                0% { transform: scale(1); }
+                40% { transform: scale(1.38); }
+                100% { transform: scale(1); }
               }
 
-              .logo-aura {
-                animation: pulseAura 2.4s ease-in-out infinite;
-              }
+              .animate-heart { animation: heartPop 0.32s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+              .ambient-halo { animation: floatAmbient 5s ease-in-out infinite; }
+              .splash-letter { display: inline-block; opacity: 0.1; animation: letterGlow 0.9s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
 
               .chroma-bar-gpu {
                 transform-origin: bottom;
@@ -678,22 +865,23 @@ jobs:
                 transition: transform 60ms linear;
               }
 
+              /* SLIDERS MODERNOS REDONDEADOS ESTILO SPOTIFY */
               input[type="range"] {
                 -webkit-appearance: none;
                 appearance: none;
-                background: #23113b;
-                height: 4px;
-                border-radius: 0px;
+                background: rgba(88, 28, 135, 0.45);
+                height: 5px;
+                border-radius: 999px;
                 outline: none;
               }
               input[type="range"]::-webkit-slider-thumb {
                 -webkit-appearance: none;
                 appearance: none;
-                width: 14px;
-                height: 14px;
-                border-radius: 0px;
-                background: #f5d0fe;
-                border: 1px solid #d946ef;
+                width: 15px;
+                height: 15px;
+                border-radius: 50%;
+                background: #ffffff;
+                border: 2px solid #e879f9;
                 box-shadow: 0 0 12px #d946ef;
                 cursor: pointer;
               }
@@ -701,36 +889,36 @@ jobs:
               .no-scrollbar::-webkit-scrollbar { display: none; }
             </style>
           </head>
-          <body class="cosmos-bg min-h-screen flex flex-col justify-between pb-40">
+          <body class="cosmos-bg min-h-screen flex flex-col justify-between pb-44">
 
-            <!-- PANTALLA DE BIENVENIDA ANIMADA (SPLASH SCREEN INTERACTIVO) -->
+            <!-- PANTALLA DE BIENVENIDA ANIMADA -->
             <div id="welcomeSplash" class="fixed inset-0 z-[100] bg-[#040109] flex flex-col items-center justify-center overflow-hidden transition-opacity duration-700">
               <img src="splash_bg.png" onerror="this.style.display='none'" class="absolute inset-0 w-full h-full object-cover opacity-35 pointer-events-none" />
               <div class="relative z-10 flex flex-col items-center px-6">
-                <div class="w-32 h-32 mb-6 flex items-center justify-center logo-aura">
-                  <img src="ic_launcher.png" onerror="this.src=window.defaultLogoDataUri" class="w-full h-full object-contain" />
+                <div class="w-32 h-32 mb-6 rounded-3xl p-1 bg-gradient-to-tr from-purple-600/40 to-fuchsia-500/40 shadow-[0_0_40px_rgba(217,70,239,0.5)] flex items-center justify-center">
+                  <img src="ic_launcher.png" onerror="this.src=window.defaultLogoDataUri" class="w-full h-full rounded-3xl object-contain" />
                 </div>
                 <div class="digital-cosmos text-3xl sm:text-4xl font-bold tracking-[0.35em] flex space-x-2">
-                  <span class="splash-letter" style="animation-delay: 0.10s">C</span>
-                  <span class="splash-letter" style="animation-delay: 0.22s">O</span>
-                  <span class="splash-letter" style="animation-delay: 0.34s">S</span>
-                  <span class="splash-letter" style="animation-delay: 0.46s">M</span>
-                  <span class="splash-letter" style="animation-delay: 0.58s">O</span>
-                  <span class="splash-letter" style="animation-delay: 0.70s">S</span>
+                  <span class="splash-letter" style="animation-delay: 0.08s">C</span>
+                  <span class="splash-letter" style="animation-delay: 0.18s">O</span>
+                  <span class="splash-letter" style="animation-delay: 0.28s">S</span>
+                  <span class="splash-letter" style="animation-delay: 0.38s">M</span>
+                  <span class="splash-letter" style="animation-delay: 0.48s">O</span>
+                  <span class="splash-letter" style="animation-delay: 0.58s">S</span>
                 </div>
-                <p class="belmont-thin text-[10px] text-fuchsia-300/90 uppercase mt-3 tracking-[0.45em] splash-letter" style="animation-delay: 0.90s">
-                  Belmont Edition
+                <p class="belmont-thin text-[10px] text-fuchsia-300/90 uppercase mt-3 tracking-[0.45em] splash-letter" style="animation-delay: 0.75s">
+                  Belmont Edition • 2027
                 </p>
-                <div class="w-48 h-[2px] bg-purple-950 mt-8 overflow-hidden">
-                  <div id="splashBar" class="h-full bg-gradient-to-r from-purple-600 via-fuchsia-400 to-white transition-all duration-1000" style="width: 15%"></div>
+                <div class="w-48 h-1 rounded-full bg-purple-950 mt-8 overflow-hidden">
+                  <div id="splashBar" class="h-full bg-gradient-to-r from-purple-600 via-fuchsia-400 to-white rounded-full transition-all duration-1000" style="width: 15%"></div>
                 </div>
               </div>
             </div>
 
-            <!-- HEADER CON TU LOGO REAL -->
-            <header class="sticky top-0 z-30 glass-card px-4 py-3 flex items-center justify-between border-b border-purple-700/40">
+            <!-- HEADER FLOTANTE 2027 -->
+            <header class="sticky top-0 z-30 glass-2027 px-4 py-3 flex items-center justify-between border-b border-fuchsia-500/20 rounded-b-3xl">
               <div class="flex items-center gap-3">
-                <div class="w-11 h-11 bg-[#090314] border border-fuchsia-500/60 flex items-center justify-center shadow-[0_0_18px_rgba(217,70,239,0.4)] overflow-hidden">
+                <div class="w-11 h-11 rounded-2xl bg-[#090314] border border-fuchsia-400/50 flex items-center justify-center shadow-[0_0_20px_rgba(217,70,239,0.35)] overflow-hidden">
                   <img id="headerLogoImg" src="ic_launcher.png" class="w-full h-full object-cover" />
                 </div>
                 <div>
@@ -739,142 +927,201 @@ jobs:
                 </div>
               </div>
               <div class="flex items-center gap-2">
-                <button onclick="openModal('timerModal')" class="px-2.5 py-1.5 bg-purple-950/80 border border-purple-600/40 text-xs text-purple-200 flex items-center gap-1.5">
+                <button onclick="openModal('timerModal')" class="px-3 py-1.5 rounded-full glass-pill text-xs text-purple-200 flex items-center gap-1.5 active:scale-95 transition">
                   <i class="fa-regular fa-clock text-fuchsia-400 text-[11px]"></i>
                   <span id="timerText" class="text-[10px] font-mono">Off</span>
                 </button>
-                <button onclick="openModal('eqModal')" class="w-9 h-9 bg-purple-950/80 border border-purple-600/40 text-purple-200 flex items-center justify-center">
-                  <i class="fa-solid fa-sliders text-xs"></i>
+                <button onclick="openModal('eqModal')" class="w-9 h-9 rounded-full glass-pill text-purple-200 flex items-center justify-center active:scale-95 transition">
+                  <i class="fa-solid fa-sliders text-xs text-fuchsia-300"></i>
                 </button>
-                <button onclick="rescanPhoneLibrary()" class="px-3.5 py-1.5 bg-gradient-to-r from-purple-700 via-purple-600 to-fuchsia-600 text-white text-xs font-semibold flex items-center gap-1.5 shadow-lg active:scale-95 border border-fuchsia-400/40">
-                  <i class="fa-solid fa-rotate"></i> Escanear
+                <button onclick="rescanPhoneLibrary()" class="px-3.5 py-1.5 rounded-full bg-gradient-to-r from-purple-600 via-fuchsia-600 to-pink-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-[0_4px_15px_rgba(217,70,239,0.4)] active:scale-95 transition">
+                  <i class="fa-solid fa-rotate"></i>
                 </button>
               </div>
             </header>
 
-            <!-- BUSCADOR -->
+            <!-- BUSCADOR CAPSULA -->
             <div class="px-4 pt-3.5">
               <div class="relative">
-                <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-3 text-fuchsia-400/60 text-xs"></i>
-                <input type="text" id="searchInput" oninput="renderLibrary()" placeholder="Buscar canción, artista o álbum..." class="w-full pl-9 pr-4 py-2.5 bg-purple-950/50 border border-purple-700/40 text-xs sm:text-sm text-purple-100 placeholder-purple-300/40 focus:outline-none focus:border-fuchsia-400" />
+                <i class="fa-solid fa-magnifying-glass absolute left-4 top-3.5 text-fuchsia-400/70 text-xs"></i>
+                <input type="text" id="searchInput" oninput="renderLibrary()" placeholder="¿Qué quieres escuchar hoy, Edward?" class="w-full pl-10 pr-4 py-2.5 rounded-full glass-pill text-xs sm:text-sm text-purple-100 placeholder-purple-300/45 focus:outline-none focus:border-fuchsia-400 transition" />
               </div>
             </div>
 
-            <!-- NAVEGADOR DE PESTAÑAS -->
+            <!-- BENTO GRID DE ACCESO RAPIDO (ESTILO SPOTIFY / APPLE MUSIC 2027) -->
+            <div class="px-4 pt-3 grid grid-cols-3 gap-2">
+              <button onclick="switchTab('favorites')" class="glass-2027 rounded-2xl p-2.5 flex items-center gap-2.5 active:scale-95 transition text-left">
+                <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-pink-500 via-fuchsia-600 to-purple-800 flex items-center justify-center text-white shadow-md shrink-0">
+                  <i class="fa-solid fa-heart text-xs"></i>
+                </div>
+                <div class="min-w-0">
+                  <div class="text-[11px] font-bold text-white truncate">Me Gusta</div>
+                  <div id="bentoLikesCount" class="text-[9px] text-fuchsia-300/80 font-medium">0 pistas</div>
+                </div>
+              </button>
+
+              <button onclick="openCreatePlaylistModal()" class="glass-2027 rounded-2xl p-2.5 flex items-center gap-2.5 active:scale-95 transition text-left">
+                <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-purple-500 to-indigo-800 flex items-center justify-center text-white shadow-md shrink-0">
+                  <i class="fa-solid fa-plus text-xs"></i>
+                </div>
+                <div class="min-w-0">
+                  <div class="text-[11px] font-bold text-white truncate">Crear Lista</div>
+                  <div id="bentoPlaylistsCount" class="text-[9px] text-purple-300/80 font-medium">Playlists</div>
+                </div>
+              </button>
+
+              <button onclick="playRandomMix()" class="glass-2027 rounded-2xl p-2.5 flex items-center gap-2.5 active:scale-95 transition text-left">
+                <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-fuchsia-500 to-purple-700 flex items-center justify-center text-white shadow-md shrink-0">
+                  <i class="fa-solid fa-wand-magic-sparkles text-xs"></i>
+                </div>
+                <div class="min-w-0">
+                  <div class="text-[11px] font-bold text-white truncate">Mix Cosmos</div>
+                  <div class="text-[9px] text-fuchsia-300/80 font-medium">Aleatorio</div>
+                </div>
+              </button>
+            </div>
+
+            <!-- PILDORAS DE NAVEGACION -->
             <nav class="flex gap-2 px-4 py-3 overflow-x-auto no-scrollbar">
-              <button onclick="switchTab('songs')" id="tab-songs" class="px-4 py-1.5 text-xs font-semibold bg-gradient-to-r from-purple-700 to-fuchsia-600 text-white border border-fuchsia-400/40 whitespace-nowrap">Canciones (<span id="countSongs">0</span>)</button>
-              <button onclick="switchTab('artists')" id="tab-artists" class="px-4 py-1.5 text-xs font-medium bg-purple-950/60 text-purple-300/80 border border-purple-800/40 whitespace-nowrap">Artistas</button>
-              <button onclick="switchTab('albums')" id="tab-albums" class="px-4 py-1.5 text-xs font-medium bg-purple-950/60 text-purple-300/80 border border-purple-800/40 whitespace-nowrap">Álbumes</button>
-              <button onclick="switchTab('playlists')" id="tab-playlists" class="px-4 py-1.5 text-xs font-medium bg-purple-950/60 text-purple-300/80 border border-purple-800/40 whitespace-nowrap">Playlists</button>
+              <button onclick="switchTab('songs')" id="tab-songs" class="px-4 py-1.5 rounded-full text-xs font-bold bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white shadow-[0_4px_14px_rgba(192,38,211,0.4)] whitespace-nowrap transition">
+                Canciones (<span id="countSongs">0</span>)
+              </button>
+              <button onclick="switchTab('favorites')" id="tab-favorites" class="px-4 py-1.5 rounded-full text-xs font-semibold glass-pill text-purple-200/85 whitespace-nowrap transition flex items-center gap-1">
+                <i class="fa-solid fa-heart text-pink-400 text-[10px]"></i> Favoritos
+              </button>
+              <button onclick="switchTab('playlists')" id="tab-playlists" class="px-4 py-1.5 rounded-full text-xs font-semibold glass-pill text-purple-200/85 whitespace-nowrap transition">
+                Playlists
+              </button>
+              <button onclick="switchTab('artists')" id="tab-artists" class="px-4 py-1.5 rounded-full text-xs font-semibold glass-pill text-purple-200/85 whitespace-nowrap transition">
+                Artistas
+              </button>
+              <button onclick="switchTab('albums')" id="tab-albums" class="px-4 py-1.5 rounded-full text-xs font-semibold glass-pill text-purple-200/85 whitespace-nowrap transition">
+                Álbumes
+              </button>
             </nav>
 
-            <!-- LISTA DE BIBLIOTECA -->
+            <div class="px-4 pb-1 flex items-center justify-between text-[10px] text-purple-300/60">
+              <span>💡 Mantén presionada una canción para Compartir o Añadir a Playlist</span>
+            </div>
+
+            <!-- CONTENEDOR PRINCIPAL DE BIBLIOTECA -->
             <main id="libraryContainer" class="px-4 flex-1 space-y-2 overflow-y-auto"></main>
 
             <footer class="mt-6 mb-2 text-center pointer-events-none">
-              <p class="belmont-thin text-[8px] uppercase text-purple-300 opacity-30">Desarrollado por Edward Belmont</p>
+              <p class="belmont-thin text-[8px] uppercase text-purple-300 opacity-35">Desarrollado por Edward Belmont</p>
             </footer>
 
-            <!-- MINI REPRODUCTOR INFERIOR CON PORTADA CUADRADA -->
-            <div class="fixed bottom-0 left-0 right-0 z-40 p-2 bg-gradient-to-t from-[#040109] via-[#040109]/95 to-transparent">
-              <div class="glass-card p-3 border border-purple-500/35">
-                <div class="flex items-center justify-between gap-3">
+            <!-- MINI REPRODUCTOR CAPSULA FLOTANTE 2027 -->
+            <div class="fixed bottom-3 left-3 right-3 z-40">
+              <div class="glass-2027 rounded-3xl p-3 border border-fuchsia-400/30 shadow-[0_16px_40px_rgba(0,0,0,0.85)]">
+                <div class="flex items-center justify-between gap-2.5">
                   <div class="flex items-center gap-3 flex-1 min-w-0 cursor-pointer" onclick="openModal('playerModal')">
-                    <img id="miniCover" src="" class="w-14 h-14 sharp-cover object-cover bg-purple-950/60 shrink-0" />
+                    <img id="miniCover" src="" class="w-13 h-13 w-[52px] h-[52px] cover-row object-cover bg-purple-950/60 shrink-0 shadow-md" />
                     <div class="min-w-0 flex-1">
                       <div class="flex items-center gap-1.5">
-                        <h3 id="miniTitle" class="font-semibold text-sm text-white truncate">Cargando biblioteca...</h3>
-                        <span id="miniChordBadge" class="px-1.5 py-0.5 text-[10px] font-bold bg-fuchsia-700 text-white border border-fuchsia-300/60 font-mono shrink-0">--</span>
-                        <span id="miniBpmBadge" class="px-1.5 py-0.5 text-[10px] font-bold bg-purple-900 text-fuchsia-200 border border-purple-500/50 font-mono shrink-0">-- BPM</span>
+                        <h3 id="miniTitle" class="font-bold text-sm text-white truncate">Selecciona una pista</h3>
+                        <span id="miniChordBadge" class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-fuchsia-600/90 text-white border border-fuchsia-300/50 font-mono shrink-0">--</span>
                       </div>
-                      <p id="miniArtist" class="text-xs text-purple-300/75 truncate mt-0.5">COSMOS Audio Engine</p>
+                      <div class="flex items-center gap-2 mt-0.5">
+                        <p id="miniArtist" class="text-xs text-purple-200/75 truncate">COSMOS 2027</p>
+                        <span id="miniBpmBadge" class="text-[9px] font-mono text-fuchsia-300/90 bg-purple-950/80 px-1.5 py-0.2 rounded-full border border-purple-700/40 shrink-0">-- BPM</span>
+                      </div>
                     </div>
                   </div>
-                  <div class="flex items-center gap-1.5">
-                    <button onclick="prevTrack()" class="w-8 h-8 flex items-center justify-center text-purple-200"><i class="fa-solid fa-backward-step"></i></button>
-                    <button onclick="togglePlay()" id="miniPlayBtn" class="w-11 h-11 bg-gradient-to-tr from-purple-600 to-fuchsia-500 text-white flex items-center justify-center shadow-md border border-fuchsia-300/40"><i class="fa-solid fa-play text-sm"></i></button>
-                    <button onclick="nextTrack()" class="w-8 h-8 flex items-center justify-center text-purple-200"><i class="fa-solid fa-forward-step"></i></button>
-                    <button onclick="openModal('playerModal')" class="w-8 h-8 bg-purple-950/80 text-purple-300 flex items-center justify-center border border-purple-700/40"><i class="fa-solid fa-chevron-up text-xs"></i></button>
+                  <div class="flex items-center gap-1">
+                    <button onclick="toggleLikeCurrent()" id="miniLikeBtn" class="w-8 h-8 rounded-full flex items-center justify-center text-purple-300/70 active:scale-90 transition">
+                      <i class="fa-regular fa-heart text-sm"></i>
+                    </button>
+                    <button onclick="prevTrack()" class="w-8 h-8 rounded-full flex items-center justify-center text-purple-200 active:scale-90"><i class="fa-solid fa-backward-step"></i></button>
+                    <button onclick="togglePlay()" id="miniPlayBtn" class="w-11 h-11 rounded-full bg-gradient-to-tr from-purple-600 via-fuchsia-500 to-pink-500 text-white flex items-center justify-center shadow-[0_0_18px_rgba(217,70,239,0.5)] active:scale-95 transition"><i class="fa-solid fa-play text-sm"></i></button>
+                    <button onclick="nextTrack()" class="w-8 h-8 rounded-full flex items-center justify-center text-purple-200 active:scale-90"><i class="fa-solid fa-forward-step"></i></button>
                   </div>
                 </div>
-                <div class="mt-2.5 flex items-center gap-2">
-                  <span id="miniCurrentTime" class="text-[10px] text-purple-300/70 w-8 font-mono">0:00</span>
+                <div class="mt-2 flex items-center gap-2 px-1">
+                  <span id="miniCurrentTime" class="text-[10px] text-purple-300/70 w-7 font-mono">0:00</span>
                   <input type="range" id="miniSeek" value="0" min="0" max="100" step="0.1" oninput="seekAudio(this.value)" class="flex-1" />
-                  <span id="miniDuration" class="text-[10px] text-purple-300/70 w-8 text-right font-mono">0:00</span>
+                  <span id="miniDuration" class="text-[10px] text-purple-300/70 w-7 text-right font-mono">0:00</span>
                 </div>
               </div>
             </div>
 
-            <!-- MODAL REPRODUCTOR COMPLETO (PORTADA CUADRADA GRANDE + ACORDES + METRONOMO BPM) -->
+            <!-- MODAL REPRODUCTOR COMPLETO 2027 (CON HALO AMBIENTAL + COMPARTIR + PLAYLIST + ACORDES + BPM) -->
             <div id="playerModal" class="fixed inset-0 z-50 cosmos-bg hidden flex-col justify-between p-4 sm:p-6 overflow-y-auto">
-              <div class="flex items-center justify-between">
-                <button onclick="closeModal('playerModal')" class="w-9 h-9 bg-purple-950/80 border border-purple-700/50 text-purple-200 flex items-center justify-center"><i class="fa-solid fa-chevron-down text-sm"></i></button>
+              <!-- Barra Superior del Reproductor -->
+              <div class="flex items-center justify-between relative z-10">
+                <button onclick="closeModal('playerModal')" class="w-10 h-10 rounded-full glass-pill text-purple-100 flex items-center justify-center active:scale-90 transition">
+                  <i class="fa-solid fa-chevron-down text-sm"></i>
+                </button>
                 <div class="text-center">
-                  <span class="digital-cosmos text-[10px] uppercase text-fuchsia-300 block">COSMOS</span>
-                  <span id="fullAlbumName" class="text-xs font-medium text-purple-200 truncate max-w-[220px] block">Álbum</span>
+                  <span class="digital-cosmos text-[10px] uppercase text-fuchsia-300 block">COSMOS 2027</span>
+                  <span id="fullAlbumName" class="text-xs font-semibold text-purple-200/90 truncate max-w-[200px] block">Álbum</span>
                 </div>
-                <button onclick="openEditModal()" class="px-3 py-1.5 bg-purple-950/80 border border-purple-600/50 text-xs text-purple-200 flex items-center gap-1.5"><i class="fa-solid fa-pen text-[10px]"></i> Editar</button>
+                <button onclick="openActionSheet(currentTrackIndex)" class="w-10 h-10 rounded-full glass-pill text-purple-100 flex items-center justify-center active:scale-90 transition">
+                  <i class="fa-solid fa-ellipsis-vertical text-sm"></i>
+                </button>
               </div>
 
-              <div class="flex-1 flex flex-col items-center justify-center space-y-3.5 my-2">
-                <!-- PORTADA GRANDE SIN BORDES REDONDOS -->
-                <img id="fullCover" src="" class="w-64 h-64 sm:w-72 sm:h-72 sharp-cover object-cover bg-purple-950/40" />
+              <!-- Portada con Luz Ambiental + Panel DSP -->
+              <div class="flex-1 flex flex-col items-center justify-center space-y-4 my-2 relative">
+                <div class="relative flex items-center justify-center">
+                  <img id="ambientCoverBlur" src="" class="absolute w-64 h-64 rounded-full object-cover blur-3xl opacity-55 ambient-halo pointer-events-none" />
+                  <img id="fullCover" src="" oncontextmenu="openActionSheet(currentTrackIndex); return false;" class="relative z-10 w-60 h-60 sm:w-68 sm:h-68 cover-2027 object-cover bg-purple-950/50" />
+                </div>
 
-                <!-- PANEL DSP: RECONOCEDOR DE ACORDES DE GUITARRA + METRONOMO EN TIEMPO REAL -->
-                <div class="w-full max-w-md glass-card p-3.5 border border-purple-500/40 space-y-3">
-                  <!-- SECCION ACORDES -->
+                <!-- PANEL STUDIO DSP: DETECTOR DE ACORDES DE GUITARRA + METRONOMO AUTO-BPM -->
+                <div class="w-full max-w-md glass-2027 rounded-3xl p-3.5 space-y-3 relative z-10">
                   <div>
                     <div class="flex items-center justify-between mb-1.5">
                       <div class="flex items-center gap-2">
-                        <span class="w-2 h-2 bg-fuchsia-400 animate-pulse"></span>
-                        <span class="text-[10px] font-semibold uppercase tracking-wider text-purple-200">Detector de Acordes (Guitarra)</span>
+                        <span class="w-2 h-2 rounded-full bg-fuchsia-400 animate-pulse"></span>
+                        <span class="text-[10px] font-bold uppercase tracking-wider text-purple-100">Acordes de Guitarra en Vivo</span>
                       </div>
-                      <button onclick="toggleChordMode()" id="chordModeBtn" class="px-2.5 py-0.5 bg-purple-900/90 border border-fuchsia-400/50 text-[10px] text-purple-100 font-medium">Tríadas (m/Maj)</button>
+                      <button onclick="toggleChordMode()" id="chordModeBtn" class="px-3 py-0.5 rounded-full bg-purple-900/90 border border-fuchsia-400/50 text-[10px] text-purple-100 font-semibold">Tríadas (m/Maj)</button>
                     </div>
-                    <div class="w-full bg-black/60 h-1 overflow-hidden mb-2.5 border border-purple-900/40">
-                      <div id="measureLockBar" class="bg-gradient-to-r from-purple-600 via-fuchsia-400 to-white h-full" style="width: 0%"></div>
+                    <div class="w-full bg-black/50 h-1.5 rounded-full overflow-hidden mb-2.5 border border-purple-900/40">
+                      <div id="measureLockBar" class="bg-gradient-to-r from-purple-600 via-fuchsia-400 to-white h-full rounded-full" style="width: 0%"></div>
                     </div>
                     <div class="grid grid-cols-3 gap-2 items-center text-center">
-                      <div class="p-2 bg-black/50 border border-purple-900/50">
-                        <span class="text-[9px] uppercase tracking-wider text-purple-400/70 block">Compás Ant.</span>
-                        <span id="prevChordBox" class="text-base font-bold text-purple-300 font-mono">--</span>
+                      <div class="p-2 rounded-2xl bg-black/45 border border-purple-800/40">
+                        <span class="text-[9px] uppercase tracking-wider text-purple-300/70 block">Compás Ant.</span>
+                        <span id="prevChordBox" class="text-base font-bold text-purple-200 font-mono">--</span>
                       </div>
-                      <div class="p-2.5 neon-chord-box">
-                        <span class="text-[9px] text-fuchsia-200 uppercase font-semibold tracking-wider block">En Compás</span>
+                      <div class="p-2.5 rounded-2xl neon-chord-box transform scale-105">
+                        <span class="text-[9px] text-fuchsia-200 uppercase font-bold tracking-wider block">En Compás</span>
                         <span id="currentChordBox" class="text-3xl font-extrabold text-white tracking-tight font-mono">--</span>
                       </div>
-                      <div class="p-2 bg-black/50 border border-purple-900/50">
-                        <span class="text-[9px] uppercase tracking-wider text-purple-400/70 block">5ta (Power)</span>
+                      <div class="p-2 rounded-2xl bg-black/45 border border-purple-800/40">
+                        <span class="text-[9px] uppercase tracking-wider text-purple-300/70 block">5ta (Power)</span>
                         <span id="nextChordBox" class="text-base font-bold text-purple-200 font-mono">--</span>
                       </div>
                     </div>
                     <div class="mt-2.5">
-                      <div id="chromaBars" class="grid grid-cols-12 gap-1 h-8 items-end pt-1 px-1.5 bg-black/60 border border-purple-900/40"></div>
+                      <div id="chromaBars" class="grid grid-cols-12 gap-1 h-8 items-end pt-1 px-2 bg-black/50 rounded-xl border border-purple-900/40"></div>
                       <div class="grid grid-cols-12 gap-1 text-[9px] text-center text-purple-300/80 font-mono mt-1 font-semibold">
                         <span>C</span><span>C#</span><span>D</span><span>D#</span><span>E</span><span>F</span><span>F#</span><span>G</span><span>G#</span><span>A</span><span>A#</span><span>B</span>
                       </div>
                     </div>
                   </div>
 
-                  <!-- SECCION METRONOMO QUIRURGICO EN TIEMPO REAL -->
+                  <!-- METRONOMO QUIRURGICO EN TIEMPO REAL -->
                   <div class="pt-2.5 border-t border-purple-800/40 flex items-center justify-between gap-2">
                     <div class="flex items-center gap-2">
-                      <div class="px-2.5 py-1 bg-black/60 border border-fuchsia-500/40 text-center min-w-[76px]">
+                      <div class="px-3 py-1 rounded-xl bg-black/55 border border-fuchsia-500/40 text-center min-w-[74px]">
                         <span id="bpmValueDisplay" class="text-base font-extrabold text-fuchsia-300 font-mono leading-none">120</span>
                         <span class="text-[8px] uppercase text-purple-300 block">BPM Auto</span>
                       </div>
-                      <div class="flex items-center gap-1.5 px-2 py-1.5 bg-black/40 border border-purple-900/40">
-                        <span id="beat-0" class="w-3 h-3 bg-purple-900 border border-purple-500/40 transition-transform"></span>
-                        <span id="beat-1" class="w-3 h-3 bg-purple-900 border border-purple-500/40 transition-transform"></span>
-                        <span id="beat-2" class="w-3 h-3 bg-purple-900 border border-purple-500/40 transition-transform"></span>
-                        <span id="beat-3" class="w-3 h-3 bg-purple-900 border border-purple-500/40 transition-transform"></span>
+                      <div class="flex items-center gap-1.5 px-2.5 py-2 rounded-xl bg-black/40 border border-purple-900/40">
+                        <span id="beat-0" class="w-2.5 h-2.5 rounded-full bg-purple-900 border border-purple-500/40 transition-transform"></span>
+                        <span id="beat-1" class="w-2.5 h-2.5 rounded-full bg-purple-900 border border-purple-500/40 transition-transform"></span>
+                        <span id="beat-2" class="w-2.5 h-2.5 rounded-full bg-purple-900 border border-purple-500/40 transition-transform"></span>
+                        <span id="beat-3" class="w-2.5 h-2.5 rounded-full bg-purple-900 border border-purple-500/40 transition-transform"></span>
                       </div>
                     </div>
                     <div class="flex items-center gap-1">
-                      <button onclick="adjustBpm(-1)" class="w-7 h-7 bg-purple-950 border border-purple-700/50 text-xs text-purple-200 font-bold">-</button>
-                      <button onclick="adjustBpm(1)" class="w-7 h-7 bg-purple-950 border border-purple-700/50 text-xs text-purple-200 font-bold">+</button>
-                      <button onclick="tapTempo()" class="px-2 h-7 bg-purple-950 border border-purple-700/50 text-[10px] text-purple-200 font-mono uppercase">Tap</button>
-                      <button onclick="toggleMetronomeSound()" id="metroSoundBtn" class="px-2.5 h-7 bg-purple-950 border border-purple-600/50 text-[10px] text-purple-200 font-semibold flex items-center gap-1">
+                      <button onclick="adjustBpm(-1)" class="w-7 h-7 rounded-full glass-pill text-xs text-purple-200 font-bold active:scale-90">-</button>
+                      <button onclick="adjustBpm(1)" class="w-7 h-7 rounded-full glass-pill text-xs text-purple-200 font-bold active:scale-90">+</button>
+                      <button onclick="tapTempo()" class="px-2.5 h-7 rounded-full glass-pill text-[10px] text-purple-200 font-mono uppercase active:scale-90">Tap</button>
+                      <button onclick="toggleMetronomeSound()" id="metroSoundBtn" class="px-3 h-7 rounded-full glass-pill text-[10px] text-purple-200 font-semibold flex items-center gap-1 active:scale-90">
                         <i class="fa-solid fa-volume-xmark" id="metroIcon"></i> Clic
                       </button>
                     </div>
@@ -882,59 +1129,138 @@ jobs:
                 </div>
               </div>
 
-              <!-- CONTROLES DE REPRODUCCION -->
-              <div class="space-y-2.5 pt-1">
-                <div class="flex items-center justify-between">
-                  <div class="min-w-0 flex-1 pr-2">
-                    <h2 id="fullTitle" class="text-base sm:text-lg font-bold text-white truncate">Sin canción</h2>
-                    <p id="fullArtist" class="text-xs sm:text-sm text-purple-300/80 truncate">--</p>
+              <!-- Info de Pista + Botones Rápidos (Like, Playlist, Compartir, EQ) -->
+              <div class="space-y-3 pt-1 relative z-10">
+                <div class="flex items-center justify-between gap-2">
+                  <div class="min-w-0 flex-1">
+                    <h2 id="fullTitle" class="text-lg sm:text-xl font-extrabold text-white truncate">Sin canción</h2>
+                    <p id="fullArtist" class="text-xs sm:text-sm text-fuchsia-200/80 truncate">--</p>
                   </div>
-                  <button onclick="openModal('eqModal')" id="fullGenreBadge" class="px-2.5 py-1 text-[10px] bg-purple-950 border border-fuchsia-500/40 text-fuchsia-200 shrink-0 font-mono">EQ: Space Rock</button>
+                  <div class="flex items-center gap-1.5 shrink-0">
+                    <button onclick="toggleLikeCurrent()" id="fullLikeBtn" class="w-9 h-9 rounded-full glass-pill flex items-center justify-center text-purple-200 active:scale-90 transition">
+                      <i class="fa-regular fa-heart text-base"></i>
+                    </button>
+                    <button onclick="openAddToPlaylistModal(currentTrackIndex)" class="w-9 h-9 rounded-full glass-pill flex items-center justify-center text-purple-200 active:scale-90 transition" title="Añadir a Playlist">
+                      <i class="fa-solid fa-folder-plus text-sm text-fuchsia-300"></i>
+                    </button>
+                    <button onclick="shareTrack(currentTrackIndex)" class="w-9 h-9 rounded-full glass-pill flex items-center justify-center text-purple-200 active:scale-90 transition" title="Compartir">
+                      <i class="fa-solid fa-share-nodes text-sm text-fuchsia-300"></i>
+                    </button>
+                    <button onclick="openModal('eqModal')" id="fullGenreBadge" class="px-3 py-1.5 rounded-full text-[10px] glass-pill text-fuchsia-200 font-mono font-bold">
+                      EQ: Space Rock
+                    </button>
+                  </div>
                 </div>
+
                 <div>
                   <input type="range" id="fullSeek" value="0" min="0" max="100" step="0.1" oninput="seekAudio(this.value)" class="w-full" />
-                  <div class="flex justify-between text-[11px] text-purple-300/70 mt-1 font-mono">
+                  <div class="flex justify-between text-[11px] text-purple-300/75 mt-1 font-mono">
                     <span id="fullCurrentTime">0:00</span>
                     <span id="fullDuration">0:00</span>
                   </div>
                 </div>
+
                 <div class="flex items-center justify-between px-2 pt-1">
-                  <button onclick="toggleShuffle()" id="shuffleBtn" class="w-10 h-10 flex items-center justify-center text-purple-400/50"><i class="fa-solid fa-shuffle text-base"></i></button>
-                  <button onclick="prevTrack()" class="w-12 h-12 bg-purple-950/90 border border-purple-700/50 flex items-center justify-center text-white text-lg active:scale-90"><i class="fa-solid fa-backward-step"></i></button>
-                  <button onclick="togglePlay()" id="fullPlayBtn" class="w-14 h-14 bg-gradient-to-tr from-purple-600 to-fuchsia-500 text-white flex items-center justify-center text-xl shadow-lg border border-fuchsia-300/50 active:scale-95"><i class="fa-solid fa-play"></i></button>
-                  <button onclick="nextTrack()" class="w-12 h-12 bg-purple-950/90 border border-purple-700/50 flex items-center justify-center text-white text-lg active:scale-90"><i class="fa-solid fa-forward-step"></i></button>
-                  <button onclick="cycleRepeat()" id="repeatBtn" class="w-10 h-10 flex items-center justify-center text-purple-400/50 relative"><i class="fa-solid fa-repeat text-base"></i><span id="repeatOneBadge" class="hidden absolute -top-0.5 -right-0.5 w-4 h-4 bg-fuchsia-400 text-[10px] font-bold text-black flex items-center justify-center">1</span></button>
+                  <button onclick="toggleShuffle()" id="shuffleBtn" class="w-10 h-10 rounded-full flex items-center justify-center text-purple-400/50 active:scale-90"><i class="fa-solid fa-shuffle text-base"></i></button>
+                  <button onclick="prevTrack()" class="w-12 h-12 rounded-full glass-pill flex items-center justify-center text-white text-lg active:scale-90"><i class="fa-solid fa-backward-step"></i></button>
+                  <button onclick="togglePlay()" id="fullPlayBtn" class="w-16 h-16 rounded-full bg-gradient-to-tr from-purple-600 via-fuchsia-500 to-pink-500 text-white flex items-center justify-center text-2xl shadow-[0_0_28px_rgba(217,70,239,0.65)] active:scale-95 transition"><i class="fa-solid fa-play"></i></button>
+                  <button onclick="nextTrack()" class="w-12 h-12 rounded-full glass-pill flex items-center justify-center text-white text-lg active:scale-90"><i class="fa-solid fa-forward-step"></i></button>
+                  <button onclick="cycleRepeat()" id="repeatBtn" class="w-10 h-10 rounded-full flex items-center justify-center text-purple-400/50 relative active:scale-90"><i class="fa-solid fa-repeat text-base"></i><span id="repeatOneBadge" class="hidden absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full bg-fuchsia-400 text-[10px] font-bold text-black flex items-center justify-center">1</span></button>
+                </div>
+              </div>
+            </div>
+
+            <!-- MENU CONTEXTUAL (BOTTOM SHEET AL MANTENER PRESIONADO O TOCAR 3 PUNTOS) -->
+            <div id="actionSheetModal" class="fixed inset-0 z-[70] bg-black/75 backdrop-blur-md hidden items-end justify-center" onclick="if(event.target===this) closeModal('actionSheetModal')">
+              <div class="glass-2027 w-full max-w-md rounded-t-3xl p-5 space-y-4 border-t border-fuchsia-400/40 pb-8">
+                <div class="w-12 h-1.5 bg-purple-400/30 rounded-full mx-auto"></div>
+                <div class="flex items-center gap-3.5 pb-3 border-b border-purple-800/40">
+                  <img id="sheetTrackCover" src="" class="w-14 h-14 cover-row object-cover shrink-0" />
+                  <div class="min-w-0 flex-1">
+                    <h4 id="sheetTrackTitle" class="text-sm font-bold text-white truncate">Canción</h4>
+                    <p id="sheetTrackArtist" class="text-xs text-fuchsia-300/80 truncate">Artista</p>
+                  </div>
+                </div>
+                <div class="space-y-2 text-xs font-semibold">
+                  <button onclick="sheetToggleLike()" class="w-full p-3.5 rounded-2xl glass-pill flex items-center gap-3.5 text-left text-purple-100 active:scale-98 transition">
+                    <i id="sheetLikeIcon" class="fa-regular fa-heart text-pink-400 text-base w-5 text-center"></i>
+                    <span id="sheetLikeText">Añadir a Tus Me Gusta</span>
+                  </button>
+                  <button onclick="sheetAddToPlaylist()" class="w-full p-3.5 rounded-2xl glass-pill flex items-center gap-3.5 text-left text-purple-100 active:scale-98 transition">
+                    <i class="fa-solid fa-list-ul text-fuchsia-400 text-base w-5 text-center"></i>
+                    <span>Añadir a una Playlist...</span>
+                  </button>
+                  <button onclick="sheetShareTrack()" class="w-full p-3.5 rounded-2xl glass-pill flex items-center gap-3.5 text-left text-purple-100 active:scale-98 transition">
+                    <i class="fa-solid fa-share-nodes text-purple-400 text-base w-5 text-center"></i>
+                    <span>Compartir canción (WhatsApp, Bluetooth, etc.)</span>
+                  </button>
+                  <button onclick="sheetEditTrack()" class="w-full p-3.5 rounded-2xl glass-pill flex items-center gap-3.5 text-left text-purple-100 active:scale-98 transition">
+                    <i class="fa-solid fa-pen-to-square text-fuchsia-300 text-base w-5 text-center"></i>
+                    <span>Editar nombre, artista o portada</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- MODAL SELECCIONAR / AÑADIR A PLAYLIST -->
+            <div id="addToPlaylistModal" class="fixed inset-0 z-[75] bg-black/80 backdrop-blur-md hidden items-center justify-center p-4">
+              <div class="glass-2027 rounded-3xl w-full max-w-md p-5 space-y-4">
+                <div class="flex justify-between items-center border-b border-purple-800/40 pb-2.5">
+                  <h3 class="font-bold text-sm text-white">Añadir a Playlist</h3>
+                  <button onclick="closeModal('addToPlaylistModal')" class="text-purple-300"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+                <button onclick="closeModal('addToPlaylistModal'); openCreatePlaylistModal(true);" class="w-full p-3 rounded-2xl bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-lg">
+                  <i class="fa-solid fa-plus"></i> Crear Nueva Playlist
+                </button>
+                <div id="playlistSelectorList" class="space-y-2 max-h-60 overflow-y-auto"></div>
+              </div>
+            </div>
+
+            <!-- MODAL CREAR NUEVA PLAYLIST -->
+            <div id="createPlaylistModal" class="fixed inset-0 z-[80] bg-black/80 backdrop-blur-md hidden items-center justify-center p-4">
+              <div class="glass-2027 rounded-3xl w-full max-w-sm p-5 space-y-4">
+                <div class="flex justify-between items-center border-b border-purple-800/40 pb-2">
+                  <h3 class="font-bold text-sm text-white">Nueva Playlist</h3>
+                  <button onclick="closeModal('createPlaylistModal')" class="text-purple-300"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+                <div>
+                  <label class="text-xs text-purple-300/80 block mb-1.5">Nombre de tu Playlist</label>
+                  <input type="text" id="newPlaylistNameInput" placeholder="Ej. Noche Gótica, Gym, Favoritas de Ale..." class="w-full p-3 rounded-2xl bg-purple-950/90 border border-purple-600/50 text-sm text-white focus:outline-none focus:border-fuchsia-400" />
+                </div>
+                <div class="flex justify-end gap-2 pt-1">
+                  <button onclick="closeModal('createPlaylistModal')" class="px-4 py-2 rounded-full glass-pill text-purple-300 text-xs">Cancelar</button>
+                  <button onclick="confirmCreatePlaylist()" class="px-5 py-2 rounded-full bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white text-xs font-bold shadow-md">Crear</button>
                 </div>
               </div>
             </div>
 
             <!-- MODAL EDITAR CANCION -->
-            <div id="editModal" class="fixed inset-0 z-50 bg-black/85 hidden items-center justify-center p-4">
-              <div class="glass-card w-full max-w-md p-5 space-y-3.5 border border-purple-500/40">
+            <div id="editModal" class="fixed inset-0 z-[75] bg-black/85 backdrop-blur-md hidden items-center justify-center p-4">
+              <div class="glass-2027 rounded-3xl w-full max-w-md p-5 space-y-3.5">
                 <div class="flex justify-between items-center border-b border-purple-800/40 pb-2">
-                  <h3 class="font-semibold text-sm text-purple-100">Modificar Información y Portada</h3>
+                  <h3 class="font-bold text-sm text-purple-100">Modificar Información y Portada</h3>
                   <button onclick="closeModal('editModal')" class="text-purple-400"><i class="fa-solid fa-xmark"></i></button>
                 </div>
                 <div class="space-y-3 text-xs">
-                  <div><label class="text-purple-300/80 block mb-1">Nombre</label><input type="text" id="editTitle" class="w-full p-2.5 bg-purple-950/90 border border-purple-700/50 text-white" /></div>
+                  <div><label class="text-purple-300/80 block mb-1">Nombre</label><input type="text" id="editTitle" class="w-full p-2.5 rounded-2xl bg-purple-950/90 border border-purple-700/50 text-white" /></div>
                   <div class="grid grid-cols-2 gap-2">
-                    <div><label class="text-purple-300/80 block mb-1">Artista</label><input type="text" id="editArtist" class="w-full p-2.5 bg-purple-950/90 border border-purple-700/50 text-white" /></div>
-                    <div><label class="text-purple-300/80 block mb-1">Álbum</label><input type="text" id="editAlbum" class="w-full p-2.5 bg-purple-950/90 border border-purple-700/50 text-white" /></div>
+                    <div><label class="text-purple-300/80 block mb-1">Artista</label><input type="text" id="editArtist" class="w-full p-2.5 rounded-2xl bg-purple-950/90 border border-purple-700/50 text-white" /></div>
+                    <div><label class="text-purple-300/80 block mb-1">Álbum</label><input type="text" id="editAlbum" class="w-full p-2.5 rounded-2xl bg-purple-950/90 border border-purple-700/50 text-white" /></div>
                   </div>
-                  <div><label class="text-purple-300/80 block mb-1">Cambiar Portada</label><input type="file" id="editCoverFile" accept="image/*" class="w-full text-[11px] text-purple-300 file:mr-2 file:py-1.5 file:px-2 file:border-0 file:bg-purple-700 file:text-white" /></div>
+                  <div><label class="text-purple-300/80 block mb-1">Cambiar Portada</label><input type="file" id="editCoverFile" accept="image/*" class="w-full text-[11px] text-purple-300 file:mr-2 file:py-1.5 file:px-3 file:rounded-full file:border-0 file:bg-purple-700 file:text-white" /></div>
                 </div>
                 <div class="flex justify-end gap-2 pt-2">
-                  <button onclick="closeModal('editModal')" class="px-4 py-2 bg-purple-950 text-purple-300 text-xs">Cancelar</button>
-                  <button onclick="saveTrackEdits()" class="px-5 py-2 bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white text-xs font-semibold">Guardar</button>
+                  <button onclick="closeModal('editModal')" class="px-4 py-2 rounded-full glass-pill text-purple-300 text-xs">Cancelar</button>
+                  <button onclick="saveTrackEdits()" class="px-5 py-2 rounded-full bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white text-xs font-bold">Guardar</button>
                 </div>
               </div>
             </div>
 
-            <!-- MODAL ECUALIZADOR DE 16 GENEROS + PREAMP -->
-            <div id="eqModal" class="fixed inset-0 z-50 bg-black/85 hidden items-center justify-center p-4">
-              <div class="glass-card w-full max-w-md p-5 space-y-4 border border-purple-500/40 max-h-[90vh] overflow-y-auto">
+            <!-- MODAL ECUALIZADOR DE 16 GENEROS -->
+            <div id="eqModal" class="fixed inset-0 z-[75] bg-black/85 backdrop-blur-md hidden items-center justify-center p-4">
+              <div class="glass-2027 rounded-3xl w-full max-w-md p-5 space-y-4 max-h-[90vh] overflow-y-auto">
                 <div class="flex justify-between items-center border-b border-purple-800/40 pb-2">
-                  <h3 class="font-semibold text-sm text-purple-100">Ecualizador Master DSP (16 Géneros)</h3>
+                  <h3 class="font-bold text-sm text-purple-100">Ecualizador Master DSP (16 Géneros)</h3>
                   <button onclick="closeModal('eqModal')" class="text-purple-400"><i class="fa-solid fa-xmark"></i></button>
                 </div>
                 <div id="eqPresetContainer" class="grid grid-cols-4 gap-1.5"></div>
@@ -949,19 +1275,24 @@ jobs:
             </div>
 
             <!-- MODAL TEMPORIZADOR -->
-            <div id="timerModal" class="fixed inset-0 z-50 bg-black/85 hidden items-center justify-center p-4">
-              <div class="glass-card w-full max-w-sm p-5 space-y-3 border border-purple-500/40 text-center">
+            <div id="timerModal" class="fixed inset-0 z-[75] bg-black/85 backdrop-blur-md hidden items-center justify-center p-4">
+              <div class="glass-2027 rounded-3xl w-full max-w-sm p-5 space-y-3 text-center">
                 <div class="flex justify-between items-center border-b border-purple-800/40 pb-2">
-                  <h3 class="font-semibold text-sm text-purple-100">Temporizador de Apagado</h3>
+                  <h3 class="font-bold text-sm text-purple-100">Temporizador de Apagado</h3>
                   <button onclick="closeModal('timerModal')" class="text-purple-400"><i class="fa-solid fa-xmark"></i></button>
                 </div>
                 <div class="grid grid-cols-3 gap-2 pt-2">
-                  <button onclick="setSleepTimer(10)" class="p-2.5 bg-purple-950 border border-purple-800/40 text-xs font-medium">10 Min</button>
-                  <button onclick="setSleepTimer(20)" class="p-2.5 bg-purple-950 border border-purple-800/40 text-xs font-medium">20 Min</button>
-                  <button onclick="setSleepTimer(45)" class="p-2.5 bg-purple-950 border border-purple-800/40 text-xs font-medium">45 Min</button>
+                  <button onclick="setSleepTimer(10)" class="p-2.5 rounded-2xl glass-pill text-xs font-semibold">10 Min</button>
+                  <button onclick="setSleepTimer(20)" class="p-2.5 rounded-2xl glass-pill text-xs font-semibold">20 Min</button>
+                  <button onclick="setSleepTimer(45)" class="p-2.5 rounded-2xl glass-pill text-xs font-semibold">45 Min</button>
                 </div>
-                <button onclick="setSleepTimer(0)" class="w-full p-2.5 bg-red-950/50 border border-red-800/40 text-xs text-red-300 font-medium mt-2">Desactivar</button>
+                <button onclick="setSleepTimer(0)" class="w-full p-2.5 rounded-2xl bg-red-950/60 border border-red-700/40 text-xs text-red-300 font-semibold mt-2">Desactivar</button>
               </div>
+            </div>
+
+            <!-- TOAST FLOTANTE DE CONFIRMACION -->
+            <div id="cosmosToast" class="fixed top-20 left-1/2 -translate-x-1/2 z-[90] px-4 py-2 rounded-full bg-gradient-to-r from-purple-700 to-fuchsia-600 text-white text-xs font-bold shadow-[0_8px_25px_rgba(217,70,239,0.5)] opacity-0 pointer-events-none transition-opacity duration-300">
+              Listo
             </div>
 
             <audio id="audioElement" preload="auto" crossorigin="anonymous"></audio>
@@ -972,9 +1303,29 @@ jobs:
               const headerLogo = document.getElementById("headerLogoImg");
               headerLogo.onerror = function() { this.src = window.defaultLogoDataUri; };
 
-              let tracks = [], customOverrides = JSON.parse(localStorage.getItem("cosmos_overrides_v12")) || {};
-              let currentTab = "songs", currentTrackIndex = -1, isPlaying = false, shuffleMode = false, repeatMode = 0;
+              let tracks = [];
+              let customOverrides = JSON.parse(localStorage.getItem("cosmos_overrides_2027")) || {};
+              let likedTrackIds = JSON.parse(localStorage.getItem("cosmos_likes_2027")) || [];
+              let userPlaylists = JSON.parse(localStorage.getItem("cosmos_playlists_2027")) || [
+                { id: "pl_default_1", name: "Sesión Nocturna ✨", tracks: [] }
+              ];
+
+              let currentTab = "songs", currentTrackIndex = -1, actionSheetTrackIdx = -1, pendingAddTrackIdx = -1;
+              let activePlaylistViewId = null;
+              let isPlaying = false, shuffleMode = false, repeatMode = 0;
               let activePresetName = "Space Rock", sleepTimerId = null;
+
+              function showToast(msg) {
+                const t = document.getElementById("cosmosToast");
+                t.textContent = msg;
+                t.style.opacity = "1";
+                setTimeout(() => { t.style.opacity = "0"; }, 2200);
+              }
+
+              function updateBentoCounters() {
+                document.getElementById("bentoLikesCount").textContent = `${likedTrackIds.length} pistas`;
+                document.getElementById("bentoPlaylistsCount").textContent = `${userPlaylists.length} listas`;
+              }
 
               const eqPresets = {
                 "Space Rock": [5, 2, 0, 4, 6],
@@ -1002,8 +1353,8 @@ jobs:
                   const btn = document.createElement("button");
                   const isAct = name === activePresetName;
                   btn.className = isAct
-                    ? "px-2 py-1.5 text-[10px] font-bold bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white border border-fuchsia-300 truncate"
-                    : "px-2 py-1.5 text-[10px] bg-purple-950/80 border border-purple-800/50 text-purple-300 truncate";
+                    ? "px-2 py-1.5 rounded-xl text-[10px] font-bold bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white border border-fuchsia-300 truncate"
+                    : "px-2 py-1.5 rounded-xl text-[10px] glass-pill text-purple-300 truncate";
                   btn.textContent = name;
                   btn.onclick = () => applyEqPreset(name);
                   container.appendChild(btn);
@@ -1017,6 +1368,7 @@ jobs:
                     const saved = customOverrides[item.id] || {};
                     return {
                       id: item.id,
+                      mediaId: item.mediaId || 0,
                       title: saved.title || item.title,
                       artist: saved.artist || item.artist,
                       album: saved.album || item.album,
@@ -1026,6 +1378,7 @@ jobs:
                       audioUrl: item.audioUrl
                     };
                   });
+                  updateBentoCounters();
                   renderLibrary();
                   if (tracks.length > 0 && currentTrackIndex === -1) loadTrack(0, false);
                 } catch(e) {}
@@ -1043,9 +1396,190 @@ jobs:
               }
 
               // =========================================================================
-              // MOTOR DE AUDIO SIN LAG (PLAYBACK BUFFER) + DSP ACORDES + AUTO-BPM
+              // SISTEMA DE ME GUSTA (LIKES), PLAYLISTS Y COMPARTIR NATIVO
               // =========================================================================
-              let audioCtx = null, analyser = null, mediaSource = null, isSourceConnected = false, eqFilters = [];
+              function isTrackLiked(trackId) {
+                return likedTrackIds.includes(trackId);
+              }
+
+              function toggleLikeByIdx(idx, ev) {
+                if (ev) ev.stopPropagation();
+                const t = tracks[idx];
+                if (!t) return;
+                const pos = likedTrackIds.indexOf(t.id);
+                if (pos >= 0) {
+                  likedTrackIds.splice(pos, 1);
+                  showToast("Quitado de Tus Me Gusta");
+                } else {
+                  likedTrackIds.push(t.id);
+                  showToast("❤️ Añadido a Tus Me Gusta");
+                }
+                localStorage.setItem("cosmos_likes_2027", JSON.stringify(likedTrackIds));
+                updateLikeButtonsUI();
+                updateBentoCounters();
+                renderLibrary();
+              }
+
+              function toggleLikeCurrent() {
+                if (currentTrackIndex >= 0) toggleLikeByIdx(currentTrackIndex);
+              }
+
+              function updateLikeButtonsUI() {
+                if (currentTrackIndex < 0 || !tracks[currentTrackIndex]) return;
+                const liked = isTrackLiked(tracks[currentTrackIndex].id);
+                const miniBtn = document.getElementById("miniLikeBtn");
+                const fullBtn = document.getElementById("fullLikeBtn");
+                const iconHtml = liked
+                  ? '<i class="fa-solid fa-heart text-pink-500 animate-heart"></i>'
+                  : '<i class="fa-regular fa-heart"></i>';
+                if (miniBtn) miniBtn.innerHTML = iconHtml;
+                if (fullBtn) fullBtn.innerHTML = iconHtml;
+              }
+
+              function openActionSheet(idx) {
+                if (idx < 0 || !tracks[idx]) return;
+                actionSheetTrackIdx = idx;
+                const t = tracks[idx];
+                if (navigator.vibrate) navigator.vibrate(25);
+                setImageWithFallback(document.getElementById("sheetTrackCover"), t.cover);
+                document.getElementById("sheetTrackTitle").textContent = t.title;
+                document.getElementById("sheetTrackArtist").textContent = `${t.artist} • ${t.album}`;
+                const liked = isTrackLiked(t.id);
+                document.getElementById("sheetLikeIcon").className = liked
+                  ? "fa-solid fa-heart text-pink-500 text-base w-5 text-center"
+                  : "fa-regular fa-heart text-pink-400 text-base w-5 text-center";
+                document.getElementById("sheetLikeText").textContent = liked
+                  ? "Quitar de Tus Me Gusta"
+                  : "Añadir a Tus Me Gusta ❤️";
+                openModal("actionSheetModal");
+              }
+
+              function sheetToggleLike() {
+                toggleLikeByIdx(actionSheetTrackIdx);
+                closeModal("actionSheetModal");
+              }
+
+              function sheetAddToPlaylist() {
+                closeModal("actionSheetModal");
+                openAddToPlaylistModal(actionSheetTrackIdx);
+              }
+
+              function sheetShareTrack() {
+                closeModal("actionSheetModal");
+                shareTrack(actionSheetTrackIdx);
+              }
+
+              function sheetEditTrack() {
+                closeModal("actionSheetModal");
+                currentTrackIndex = actionSheetTrackIdx;
+                openEditModal();
+              }
+
+              function shareTrack(idx) {
+                const t = tracks[idx];
+                if (!t) return;
+                if (window.CosmosNative && window.CosmosNative.shareTrackNative) {
+                  window.CosmosNative.shareTrackNative(t.mediaId || 0, t.title, t.artist, t.album);
+                } else if (navigator.share) {
+                  navigator.share({ title: t.title, text: `🎵 Escuchando "${t.title}" de ${t.artist} en COSMOS` }).catch(()=>{});
+                }
+              }
+
+              function openCreatePlaylistModal(fromSelector = false) {
+                if (!fromSelector) pendingAddTrackIdx = -1;
+                document.getElementById("newPlaylistNameInput").value = "";
+                openModal("createPlaylistModal");
+              }
+
+              function confirmCreatePlaylist() {
+                const name = document.getElementById("newPlaylistNameInput").value.trim();
+                if (!name) return;
+                const newPl = { id: "pl_" + Date.now(), name: name, tracks: [] };
+                if (pendingAddTrackIdx >= 0 && tracks[pendingAddTrackIdx]) {
+                  newPl.tracks.push(tracks[pendingAddTrackIdx].id);
+                  showToast(`✨ Creada y añadida a "${name}"`);
+                } else {
+                  showToast(`✨ Playlist "${name}" creada`);
+                }
+                userPlaylists.push(newPl);
+                localStorage.setItem("cosmos_playlists_2027", JSON.stringify(userPlaylists));
+                pendingAddTrackIdx = -1;
+                updateBentoCounters();
+                closeModal("createPlaylistModal");
+                renderLibrary();
+              }
+
+              function openAddToPlaylistModal(idx) {
+                if (idx < 0 || !tracks[idx]) return;
+                pendingAddTrackIdx = idx;
+                const listEl = document.getElementById("playlistSelectorList");
+                listEl.innerHTML = "";
+                const trackId = tracks[idx].id;
+
+                userPlaylists.forEach(pl => {
+                  const alreadyIn = pl.tracks.includes(trackId);
+                  const btn = document.createElement("button");
+                  btn.className = "w-full p-3 rounded-2xl glass-pill flex items-center justify-between text-left active:scale-98 transition";
+                  btn.innerHTML = `
+                    <div class="flex items-center gap-3 min-w-0">
+                      <div class="w-9 h-9 rounded-xl bg-purple-900/80 border border-fuchsia-400/30 flex items-center justify-center text-fuchsia-300 shrink-0">
+                        <i class="fa-solid fa-music text-xs"></i>
+                      </div>
+                      <div class="min-w-0">
+                        <div class="text-xs font-bold text-white truncate">${pl.name}</div>
+                        <div class="text-[10px] text-purple-300/70">${pl.tracks.length} canciones</div>
+                      </div>
+                    </div>
+                    <span class="text-xs font-bold ${alreadyIn ? 'text-fuchsia-400' : 'text-purple-300'}">${alreadyIn ? '✓ Añadida' : '+ Añadir'}</span>
+                  `;
+                  btn.onclick = () => {
+                    if (!alreadyIn) {
+                      pl.tracks.push(trackId);
+                      localStorage.setItem("cosmos_playlists_2027", JSON.stringify(userPlaylists));
+                      showToast(`🎵 Añadida a "${pl.name}"`);
+                    } else {
+                      showToast(`Ya estaba en "${pl.name}"`);
+                    }
+                    closeModal("addToPlaylistModal");
+                    renderLibrary();
+                  };
+                  listEl.appendChild(btn);
+                });
+                openModal("addToPlaylistModal");
+              }
+
+              function deletePlaylist(plId, ev) {
+                if (ev) ev.stopPropagation();
+                userPlaylists = userPlaylists.filter(p => p.id !== plId);
+                localStorage.setItem("cosmos_playlists_2027", JSON.stringify(userPlaylists));
+                updateBentoCounters();
+                renderLibrary();
+                showToast("Playlist eliminada");
+              }
+
+              function removeTrackFromPlaylist(plId, trackId, ev) {
+                if (ev) ev.stopPropagation();
+                const pl = userPlaylists.find(p => p.id === plId);
+                if (!pl) return;
+                pl.tracks = pl.tracks.filter(id => id !== trackId);
+                localStorage.setItem("cosmos_playlists_2027", JSON.stringify(userPlaylists));
+                renderLibrary();
+                showToast("Quitada de la playlist");
+              }
+
+              function playRandomMix() {
+                if (!tracks.length) return;
+                shuffleMode = true;
+                document.getElementById("shuffleBtn").className = "w-10 h-10 rounded-full flex items-center justify-center text-fuchsia-400";
+                const rnd = Math.floor(Math.random() * tracks.length);
+                loadTrack(rnd, true);
+                showToast("🔀 Mix Cosmos Activado");
+              }
+
+              // =========================================================================
+              // MOTOR DE AUDIO SIN LAG + DUCKING + ACORDES + AUTO-BPM
+              // =========================================================================
+              let audioCtx = null, analyser = null, mediaSource = null, masterGainNode = null, isSourceConnected = false, eqFilters = [];
               let chordDetectionMode = "triad";
               const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
               let smoothedRoot = new Float32Array(12), smoothedChroma = new Float32Array(12);
@@ -1054,10 +1588,17 @@ jobs:
               const HOLD_MS = 1350;
               const audioEl = document.getElementById("audioElement");
 
-              // Variables del Metrónomo y Detector Automático de Tempo (BPM)
               let detectedBpm = 120, prevLowEnergy = 0, lastPeakTime = 0;
               let onsetIntervals = [], tapTimes = [];
               let metronomeSoundEnabled = false, currentBeatIndex = 0, nextBeatTime = 0;
+
+              window.setDuckVolume = function(val) {
+                if (masterGainNode && audioCtx) {
+                  masterGainNode.gain.setTargetAtTime(val, audioCtx.currentTime, 0.08);
+                } else {
+                  audioEl.volume = val;
+                }
+              };
 
               function initAudioEngine() {
                 if (!audioCtx) {
@@ -1067,6 +1608,8 @@ jobs:
                     analyser = audioCtx.createAnalyser();
                     analyser.fftSize = 4096;
                     analyser.smoothingTimeConstant = 0.80;
+                    masterGainNode = audioCtx.createGain();
+                    masterGainNode.gain.value = 1.0;
                     fftDbBuffer = new Float32Array(analyser.frequencyBinCount);
                   } catch (e) {}
                 }
@@ -1089,7 +1632,8 @@ jobs:
                     let curr = mediaSource;
                     eqFilters.forEach(f => { curr.connect(f); curr = f; });
                     curr.connect(analyser);
-                    analyser.connect(audioCtx.destination);
+                    analyser.connect(masterGainNode);
+                    masterGainNode.connect(audioCtx.destination);
                     isSourceConnected = true;
                   } catch (e) {
                     isSourceConnected = true;
@@ -1097,7 +1641,13 @@ jobs:
                 }
               }
 
-              // Bucle DSP desacoplado a 20Hz (cada 50ms) para CERO lag en el audio
+              // Vigilante Bluetooth Keep-Alive: asegura que el AudioContext jamas se duerma mientras suena una pista
+              setInterval(() => {
+                if (isPlaying && audioCtx && audioCtx.state === "suspended") {
+                  audioCtx.resume();
+                }
+              }, 2000);
+
               setInterval(() => {
                 if (!isPlaying || !analyser || !audioCtx || !fftDbBuffer) return;
 
@@ -1106,7 +1656,6 @@ jobs:
                 const instRoot = new Float32Array(12);
                 const instChroma = new Float32Array(12);
 
-                // 1. Detección de Transientes Rítmicos (65Hz - 180Hz) para BPM Automático
                 let lowRhythmEnergy = 0;
                 const minBin = Math.max(2, Math.floor(60 / binW));
                 const maxBin = Math.min(fftDbBuffer.length - 4, Math.ceil(780 / binW));
@@ -1122,7 +1671,6 @@ jobs:
                     if (db >= fftDbBuffer[b - 1] && db >= fftDbBuffer[b + 1]) {
                       const p = ((Math.round(12 * Math.log2(freq / 440) + 69) % 12) + 12) % 12;
                       instChroma[p] += mag;
-                      // Foco quirúrgico en fundamentales de guitarra (E2 82Hz a G4 392Hz)
                       if (freq >= 78 && freq <= 400) {
                         instRoot[p] += mag * (freq < 220 ? 1.75 : 1.25);
                       }
@@ -1131,7 +1679,6 @@ jobs:
                 }
 
                 const now = performance.now();
-                // Detector de picos de percusión/rasgueo para calcular el Tempo (BPM)
                 if (lowRhythmEnergy > prevLowEnergy * 1.38 && lowRhythmEnergy > 0.012 && (now - lastPeakTime) > 260) {
                   const interval = now - lastPeakTime;
                   lastPeakTime = now;
@@ -1151,7 +1698,6 @@ jobs:
                 }
                 prevLowEnergy = lowRhythmEnergy * 0.75 + prevLowEnergy * 0.25;
 
-                // 2. Procesamiento Armónico de Acordes de Guitarra
                 let sig = 0;
                 for (let i = 0; i < 12; i++) {
                   smoothedRoot[i] = smoothedRoot[i] * 0.80 + instRoot[i] * 0.20;
@@ -1194,7 +1740,6 @@ jobs:
                 }
               }, 50);
 
-              // Reloj del Metrónomo de Alta Precisión
               setInterval(() => {
                 if (!isPlaying) return;
                 const now = performance.now();
@@ -1207,10 +1752,10 @@ jobs:
                     if (led) {
                       if (i === currentBeatIndex) {
                         led.className = i === 0
-                          ? "w-3 h-3 bg-white border border-fuchsia-300 shadow-[0_0_10px_#fff] scale-125 transition-transform"
-                          : "w-3 h-3 bg-fuchsia-400 border border-fuchsia-200 shadow-[0_0_8px_#e879f9] scale-110 transition-transform";
+                          ? "w-2.5 h-2.5 rounded-full bg-white border border-fuchsia-300 shadow-[0_0_10px_#fff] scale-125 transition-transform"
+                          : "w-2.5 h-2.5 rounded-full bg-fuchsia-400 border border-fuchsia-200 shadow-[0_0_8px_#e879f9] scale-110 transition-transform";
                       } else {
-                        led.className = "w-3 h-3 bg-purple-950 border border-purple-600/40 transition-transform";
+                        led.className = "w-2.5 h-2.5 rounded-full bg-purple-950 border border-purple-600/40 transition-transform";
                       }
                     }
                   }
@@ -1241,10 +1786,10 @@ jobs:
                 const btn = document.getElementById("metroSoundBtn");
                 const icon = document.getElementById("metroIcon");
                 if (metronomeSoundEnabled) {
-                  btn.className = "px-2.5 h-7 bg-fuchsia-600 border border-fuchsia-300 text-[10px] text-white font-bold flex items-center gap-1 shadow-[0_0_10px_rgba(217,70,239,0.5)]";
+                  btn.className = "px-3 h-7 rounded-full bg-fuchsia-600 border border-fuchsia-300 text-[10px] text-white font-bold flex items-center gap-1 shadow-[0_0_10px_rgba(217,70,239,0.5)]";
                   icon.className = "fa-solid fa-volume-high";
                 } else {
-                  btn.className = "px-2.5 h-7 bg-purple-950 border border-purple-600/50 text-[10px] text-purple-200 font-semibold flex items-center gap-1";
+                  btn.className = "px-3 h-7 rounded-full glass-pill text-[10px] text-purple-200 font-semibold flex items-center gap-1";
                   icon.className = "fa-solid fa-volume-xmark";
                 }
               }
@@ -1338,6 +1883,7 @@ jobs:
                 lockedPitch = -1; prevChordName = "--"; onsetIntervals = [];
                 setImageWithFallback(document.getElementById("miniCover"), t.cover);
                 setImageWithFallback(document.getElementById("fullCover"), t.cover);
+                setImageWithFallback(document.getElementById("ambientCoverBlur"), t.cover);
                 document.getElementById("miniTitle").textContent = t.title;
                 document.getElementById("miniArtist").textContent = t.artist;
                 document.getElementById("fullTitle").textContent = t.title;
@@ -1345,6 +1891,7 @@ jobs:
                 document.getElementById("fullAlbumName").textContent = t.album;
                 audioEl.src = t.audioUrl;
                 audioEl.load();
+                updateLikeButtonsUI();
                 renderLibrary();
                 notifyNativeAndroidService();
                 if(autoPlay) playAudio();
@@ -1389,8 +1936,8 @@ jobs:
               function toggleShuffle() {
                 shuffleMode = !shuffleMode;
                 document.getElementById("shuffleBtn").className = shuffleMode
-                  ? "w-10 h-10 flex items-center justify-center text-fuchsia-400"
-                  : "w-10 h-10 flex items-center justify-center text-purple-400/50";
+                  ? "w-10 h-10 rounded-full flex items-center justify-center text-fuchsia-400"
+                  : "w-10 h-10 rounded-full flex items-center justify-center text-purple-400/50";
               }
 
               function cycleRepeat() {
@@ -1398,12 +1945,12 @@ jobs:
                 const btn = document.getElementById("repeatBtn");
                 const badge = document.getElementById("repeatOneBadge");
                 btn.className = repeatMode > 0
-                  ? "w-10 h-10 flex items-center justify-center text-fuchsia-400 relative"
-                  : "w-10 h-10 flex items-center justify-center text-purple-400/50 relative";
+                  ? "w-10 h-10 rounded-full flex items-center justify-center text-fuchsia-400 relative"
+                  : "w-10 h-10 rounded-full flex items-center justify-center text-purple-400/50 relative";
                 badge.classList.toggle("hidden", repeatMode !== 2);
               }
 
-              audioEl.addEventListener("Play", () => initAudioEngine());
+              audioEl.addEventListener("play", () => initAudioEngine());
               audioEl.addEventListener("timeupdate", () => updateTimeUI(audioEl.currentTime, audioEl.duration || 0));
               audioEl.addEventListener("loadedmetadata", () => notifyNativeAndroidService());
               audioEl.addEventListener("ended", nextTrack);
@@ -1444,13 +1991,65 @@ jobs:
 
               function switchTab(tab) {
                 currentTab = tab;
-                ["songs", "artists", "albums", "playlists"].forEach(t => {
+                activePlaylistViewId = null;
+                ["songs", "favorites", "playlists", "artists", "albums"].forEach(t => {
                   const btn = document.getElementById(`tab-${t}`);
+                  if (!btn) return;
                   btn.className = t === tab
-                    ? "px-4 py-1.5 text-xs font-semibold bg-gradient-to-r from-purple-700 to-fuchsia-600 text-white border border-fuchsia-400/40 whitespace-nowrap"
-                    : "px-4 py-1.5 text-xs font-medium bg-purple-950/60 text-purple-300/80 border border-purple-800/40 whitespace-nowrap";
+                    ? "px-4 py-1.5 rounded-full text-xs font-bold bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white shadow-[0_4px_14px_rgba(192,38,211,0.4)] whitespace-nowrap transition flex items-center gap-1"
+                    : "px-4 py-1.5 rounded-full text-xs font-semibold glass-pill text-purple-200/85 whitespace-nowrap transition flex items-center gap-1";
                 });
                 renderLibrary();
+              }
+
+              // Helper para crear una fila de cancion con soporte de Long-Press (Mantener presionado)
+              function createSongRowElement(track, idx, extraRightHtml = "") {
+                const isCur = idx === currentTrackIndex;
+                const liked = isTrackLiked(track.id);
+                const div = document.createElement("div");
+                div.className = `p-2.5 rounded-2xl flex items-center justify-between gap-3 cursor-pointer transition active:scale-[0.99] ${isCur ? "glass-2027 border-fuchsia-400/70 shadow-[0_0_20px_rgba(217,70,239,0.28)]" : "glass-2027 hover:bg-purple-900/20"}`;
+
+                let pressTimer = null;
+                let longPressTriggered = false;
+
+                div.addEventListener("touchstart", () => {
+                  longPressTriggered = false;
+                  pressTimer = setTimeout(() => {
+                    longPressTriggered = true;
+                    openActionSheet(idx);
+                  }, 460);
+                }, { passive: true });
+
+                div.addEventListener("touchend", () => { if (pressTimer) clearTimeout(pressTimer); });
+                div.addEventListener("touchmove", () => { if (pressTimer) clearTimeout(pressTimer); });
+                div.oncontextmenu = (e) => { e.preventDefault(); openActionSheet(idx); return false; };
+
+                const mainArea = document.createElement("div");
+                mainArea.className = "flex items-center gap-3 min-w-0 flex-1";
+                mainArea.onclick = () => { if (!longPressTriggered) loadTrack(idx, true); };
+                mainArea.innerHTML = `
+                  <img src="${track.cover}" onerror="this.onerror=null;this.src='ic_launcher.png';" class="w-12 h-12 cover-row object-cover shrink-0 shadow" />
+                  <div class="min-w-0 flex-1">
+                    <h4 class="text-sm font-bold ${isCur ? "text-fuchsia-300" : "text-white"} truncate">${track.title}</h4>
+                    <p class="text-xs text-purple-300/70 truncate">${track.artist} • ${track.album}</p>
+                  </div>
+                `;
+
+                const actionsArea = document.createElement("div");
+                actionsArea.className = "flex items-center gap-1 shrink-0";
+                actionsArea.innerHTML = `
+                  ${extraRightHtml}
+                  <button onclick="toggleLikeByIdx(${idx}, event)" class="w-8 h-8 rounded-full flex items-center justify-center ${liked ? 'text-pink-500' : 'text-purple-300/50'}">
+                    <i class="${liked ? 'fa-solid' : 'fa-regular'} fa-heart text-xs"></i>
+                  </button>
+                  <button onclick="event.stopPropagation(); openActionSheet(${idx});" class="w-8 h-8 rounded-full flex items-center justify-center text-purple-300/75">
+                    <i class="fa-solid fa-ellipsis-vertical text-xs"></i>
+                  </button>
+                `;
+
+                div.appendChild(mainArea);
+                div.appendChild(actionsArea);
+                return div;
               }
 
               function renderLibrary(filterField = null, filterValue = null) {
@@ -1460,16 +2059,17 @@ jobs:
                 container.innerHTML = "";
 
                 if(tracks.length === 0) {
-                  container.innerHTML = `<div class="glass-card p-8 text-center my-6 border border-purple-700/30"><h3 class="text-sm font-semibold text-white mb-1">Escaneando Memoria...</h3><button onclick="rescanPhoneLibrary()" class="mt-3 px-5 py-2.5 bg-purple-700 text-white text-xs font-bold">Escanear Dispositivo</button></div>`;
+                  container.innerHTML = `<div class="glass-2027 rounded-3xl p-8 text-center my-6"><h3 class="text-sm font-bold text-white mb-1">Escaneando tu Música...</h3><button onclick="rescanPhoneLibrary()" class="mt-3 px-6 py-2.5 rounded-full bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white text-xs font-bold shadow-lg">Escanear Memoria</button></div>`;
                   return;
                 }
 
-                let filtered = tracks.filter(t => t.title.toLowerCase().includes(query) || t.artist.toLowerCase().includes(query));
+                let filtered = tracks.filter(t => t.title.toLowerCase().includes(query) || t.artist.toLowerCase().includes(query) || t.album.toLowerCase().includes(query));
+
                 if(filterField && filterValue) {
                   filtered = filtered.filter(t => t[filterField] === filterValue);
                   const back = document.createElement("button");
-                  back.className = "mb-2 text-xs text-fuchsia-300 font-semibold flex items-center gap-1";
-                  back.innerHTML = `<i class="fa-solid fa-arrow-left"></i> Volver`;
+                  back.className = "mb-2 px-3.5 py-1.5 rounded-full glass-pill text-xs text-fuchsia-300 font-bold flex items-center gap-1.5";
+                  back.innerHTML = `<i class="fa-solid fa-arrow-left"></i> Volver a ${currentTab === 'artists' ? 'Artistas' : 'Álbumes'}`;
                   back.onclick = () => renderLibrary();
                   container.appendChild(back);
                 }
@@ -1477,19 +2077,84 @@ jobs:
                 if(currentTab === "songs" || filterField) {
                   filtered.forEach(track => {
                     const idx = tracks.indexOf(track);
-                    const isCur = idx === currentTrackIndex;
-                    const div = document.createElement("div");
-                    div.className = `p-2.5 flex items-center justify-between gap-3 cursor-pointer transition ${isCur ? "bg-purple-900/65 border border-fuchsia-400/70 shadow-[0_0_15px_rgba(217,70,239,0.25)]" : "glass-card hover:bg-purple-900/20"}`;
-                    div.innerHTML = `<div class="flex items-center gap-3 min-w-0 flex-1" onclick="loadTrack(${idx}, true)"><img src="${track.cover}" onerror="this.onerror=null;this.src='ic_launcher.png';" class="w-12 h-12 sharp-cover object-cover shrink-0" /><div class="min-w-0 flex-1"><h4 class="text-sm font-semibold ${isCur?"text-fuchsia-300":"text-white"} truncate">${track.title}</h4><p class="text-xs text-purple-300/70 truncate">${track.artist} • ${track.album}</p></div></div><button onclick="currentTrackIndex=${idx};openEditModal();" class="p-2 text-purple-300/70 hover:text-white"><i class="fa-solid fa-pen text-xs"></i></button>`;
-                    container.appendChild(div);
+                    container.appendChild(createSongRowElement(track, idx));
+                  });
+                } else if(currentTab === "favorites") {
+                  const favTracks = filtered.filter(t => isTrackLiked(t.id));
+                  if (favTracks.length === 0) {
+                    container.innerHTML = `<div class="glass-2027 rounded-3xl p-8 text-center text-xs text-purple-300/80"><i class="fa-regular fa-heart text-2xl text-pink-400 mb-2 block"></i>Aún no tienes canciones en Tus Me Gusta.<br>Toca el corazón ❤️ en cualquier canción para guardarla aquí.</div>`;
+                    return;
+                  }
+                  favTracks.forEach(track => {
+                    const idx = tracks.indexOf(track);
+                    container.appendChild(createSongRowElement(track, idx));
+                  });
+                } else if(currentTab === "playlists") {
+                  if (activePlaylistViewId) {
+                    const pl = userPlaylists.find(p => p.id === activePlaylistViewId);
+                    if (!pl) { activePlaylistViewId = null; renderLibrary(); return; }
+                    const topBar = document.createElement("div");
+                    topBar.className = "flex items-center justify-between mb-3";
+                    topBar.innerHTML = `
+                      <button onclick="activePlaylistViewId=null; renderLibrary();" class="px-3.5 py-1.5 rounded-full glass-pill text-xs text-fuchsia-300 font-bold flex items-center gap-1.5">
+                        <i class="fa-solid fa-arrow-left"></i> Playlists
+                      </button>
+                      <h3 class="text-sm font-extrabold text-white truncate">${pl.name}</h3>
+                    `;
+                    container.appendChild(topBar);
+
+                    const plTracks = pl.tracks.map(id => tracks.find(t => t.id === id)).filter(Boolean);
+                    if (plTracks.length === 0) {
+                      const empty = document.createElement("div");
+                      empty.className = "glass-2027 rounded-3xl p-6 text-center text-xs text-purple-300/80";
+                      empty.innerHTML = "Esta playlist está vacía.<br>Mantén presionada cualquier canción en tu biblioteca para añadirla aquí.";
+                      container.appendChild(empty);
+                    } else {
+                      plTracks.forEach(track => {
+                        const idx = tracks.indexOf(track);
+                        const removeBtn = `<button onclick="removeTrackFromPlaylist('${pl.id}', '${track.id}', event)" class="w-8 h-8 rounded-full flex items-center justify-center text-red-400/80" title="Quitar"><i class="fa-solid fa-xmark text-xs"></i></button>`;
+                        container.appendChild(createSongRowElement(track, idx, removeBtn));
+                      });
+                    }
+                    return;
+                  }
+
+                  const headerBtn = document.createElement("button");
+                  headerBtn.className = "w-full p-3.5 mb-2 rounded-2xl bg-gradient-to-r from-purple-700/80 to-fuchsia-600/80 border border-fuchsia-400/40 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-md active:scale-98 transition";
+                  headerBtn.innerHTML = `<i class="fa-solid fa-plus"></i> Crear Nueva Playlist Personalizada`;
+                  headerBtn.onclick = () => openCreatePlaylistModal(false);
+                  container.appendChild(headerBtn);
+
+                  userPlaylists.forEach(pl => {
+                    const firstTrack = pl.tracks.map(id => tracks.find(t => t.id === id)).find(Boolean);
+                    const coverSrc = firstTrack ? firstTrack.cover : "ic_launcher.png";
+                    const card = document.createElement("div");
+                    card.className = "glass-2027 p-3 rounded-2xl flex items-center justify-between cursor-pointer active:scale-98 transition";
+                    card.onclick = () => { activePlaylistViewId = pl.id; renderLibrary(); };
+                    card.innerHTML = `
+                      <div class="flex items-center gap-3.5 min-w-0">
+                        <img src="${coverSrc}" onerror="this.onerror=null;this.src='ic_launcher.png';" class="w-13 h-13 w-[52px] h-[52px] cover-row object-cover shrink-0" />
+                        <div class="min-w-0">
+                          <h4 class="text-sm font-bold text-white truncate">${pl.name}</h4>
+                          <p class="text-xs text-fuchsia-300/75">${pl.tracks.length} canciones</p>
+                        </div>
+                      </div>
+                      <div class="flex items-center gap-2">
+                        <button onclick="deletePlaylist('${pl.id}', event)" class="w-8 h-8 rounded-full flex items-center justify-center text-purple-400/60 hover:text-red-400">
+                          <i class="fa-regular fa-trash-can text-xs"></i>
+                        </button>
+                        <i class="fa-solid fa-chevron-right text-purple-400 text-xs pr-1"></i>
+                      </div>
+                    `;
+                    container.appendChild(card);
                   });
                 } else if(currentTab === "artists") {
                   [...new Set(filtered.map(t => t.artist))].forEach(artist => {
                     const artistTracks = tracks.filter(t => t.artist === artist);
                     const div = document.createElement("div");
-                    div.className = `glass-card p-3 flex items-center justify-between cursor-pointer`;
+                    div.className = "glass-2027 p-3 rounded-2xl flex items-center justify-between cursor-pointer active:scale-98 transition";
                     div.onclick = () => renderLibrary("artist", artist);
-                    div.innerHTML = `<div class="flex items-center gap-3"><img src="${artistTracks[0]?.cover}" onerror="this.onerror=null;this.src='ic_launcher.png';" class="w-12 h-12 sharp-cover object-cover" /><div><h4 class="text-sm font-semibold text-white">${artist}</h4><p class="text-xs text-purple-300/65">${artistTracks.length} pistas</p></div></div><i class="fa-solid fa-chevron-right text-purple-400 text-xs"></i>`;
+                    div.innerHTML = `<div class="flex items-center gap-3.5"><img src="${artistTracks[0]?.cover}" onerror="this.onerror=null;this.src='ic_launcher.png';" class="w-12 h-12 rounded-full object-cover border border-fuchsia-400/40" /><div><h4 class="text-sm font-bold text-white">${artist}</h4><p class="text-xs text-purple-300/70">${artistTracks.length} pistas</p></div></div><i class="fa-solid fa-chevron-right text-purple-400 text-xs pr-2"></i>`;
                     container.appendChild(div);
                   });
                 } else if(currentTab === "albums") {
@@ -1497,14 +2162,12 @@ jobs:
                   [...new Set(filtered.map(t => t.album))].forEach(album => {
                     const sample = tracks.find(t => t.album === album);
                     const card = document.createElement("div");
-                    card.className = "glass-card p-3 cursor-pointer";
+                    card.className = "glass-2027 p-3 rounded-3xl cursor-pointer active:scale-98 transition";
                     card.onclick = () => renderLibrary("album", album);
-                    card.innerHTML = `<img src="${sample.cover}" onerror="this.onerror=null;this.src='ic_launcher.png';" class="w-full aspect-square sharp-cover object-cover mb-2" /><h4 class="text-xs font-semibold text-white truncate">${album}</h4><p class="text-[11px] text-purple-300/70 truncate">${sample.artist}</p>`;
+                    card.innerHTML = `<img src="${sample.cover}" onerror="this.onerror=null;this.src='ic_launcher.png';" class="w-full aspect-square cover-2027 object-cover mb-2.5" /><h4 class="text-xs font-bold text-white truncate px-1">${album}</h4><p class="text-[11px] text-purple-300/75 truncate px-1">${sample.artist}</p>`;
                     grid.appendChild(card);
                   });
                   container.appendChild(grid);
-                } else if(currentTab === "playlists") {
-                  container.innerHTML = `<div class="glass-card p-6 text-center text-xs text-purple-300">Todas tus pistas activas (${tracks.length} canciones listas)</div>`;
                 }
               }
 
@@ -1524,8 +2187,9 @@ jobs:
                 const coverFile = document.getElementById("editCoverFile").files[0];
                 const save = () => {
                   customOverrides[t.id] = { title: t.title, artist: t.artist, album: t.album, cover: t.cover };
-                  localStorage.setItem("cosmos_overrides_v12", JSON.stringify(customOverrides));
+                  localStorage.setItem("cosmos_overrides_2027", JSON.stringify(customOverrides));
                   loadTrack(currentTrackIndex, isPlaying);
+                  showToast("✨ Información actualizada");
                 };
                 if(coverFile) {
                   const reader = new FileReader();
@@ -1543,15 +2207,15 @@ jobs:
                 for(let i=0; i<12; i++) {
                   const bar = document.createElement("div");
                   bar.id = `chroma-bar-${i}`;
-                  bar.className = "bg-gradient-to-t from-purple-700 via-fuchsia-400 to-white h-full w-full chroma-bar-gpu";
+                  bar.className = "bg-gradient-to-t from-purple-700 via-fuchsia-400 to-white h-full w-full rounded-t-sm chroma-bar-gpu";
                   bar.style.transform = "scaleY(0.12)";
                   c.appendChild(bar);
                   chromaBarEls.push(bar);
                 }
                 renderEqButtons();
+                updateBentoCounters();
                 rescanPhoneLibrary();
 
-                // Animación del Splash Screen al iniciar
                 const splash = document.getElementById("welcomeSplash");
                 const bar = document.getElementById("splashBar");
                 setTimeout(() => { if(bar) bar.style.width = "100%"; }, 100);
@@ -1560,7 +2224,7 @@ jobs:
                     splash.style.opacity = "0";
                     setTimeout(() => splash.remove(), 700);
                   }
-                }, 2200);
+                }, 2100);
               });
             </script>
           </body>
