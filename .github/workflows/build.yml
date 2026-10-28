@@ -35,7 +35,7 @@ jobs:
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
           echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
 
-      - name: Ensamblar COSMOS 2027 Flagship Edition
+      - name: Ensamblar COSMOS 2027 Ultra-60FPS + Bluetooth Turbo
         run: |
           mkdir -p app/src/main/java/com/belmont/cosmos
           mkdir -p app/src/main/assets
@@ -162,8 +162,8 @@ jobs:
                   applicationId "com.belmont.cosmos"
                   minSdk 26
                   targetSdk 34
-                  versionCode 3
-                  versionName "3.0-2027"
+                  versionCode 4
+                  versionName "4.0-TURBO"
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
@@ -178,12 +178,13 @@ jobs:
           }
           EOF
 
-          # MANIFIESTO CON PERMISOS DE WAKE_LOCK, BLUETOOTH Y FOREGROUND SERVICE MEDIA PLAYBACK
+          # MANIFIESTO CON IGNORAR OPTIMIZACION DE BATERIA PARA QUE NUNCA SE TRABE EN BLUETOOTH
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.WAKE_LOCK" />
+              <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
               <uses-permission android:name="android.permission.BLUETOOTH" />
@@ -198,6 +199,7 @@ jobs:
                   android:roundIcon="@mipmap/ic_launcher_round"
                   android:theme="@style/Theme.CosmosSplash"
                   android:hardwareAccelerated="true"
+                  android:largeHeap="true"
                   android:usesCleartextTraffic="true">
 
                   <activity
@@ -215,12 +217,13 @@ jobs:
                       android:name=".CosmosPlaybackService"
                       android:enabled="true"
                       android:exported="false"
+                      android:stopWithTask="false"
                       android:foregroundServiceType="mediaPlayback" />
               </application>
           </manifest>
           EOF
 
-          # SERVICIO EN PRIMER PLANO CON WAKELOCK PARA QUE NUNCA SE CORTE EN BLUETOOTH
+          # SERVICIO EN PRIMER PLANO CON ALTA PRIORIDAD Y WAKELOCK CONTINUO
           cat << 'EOF' > app/src/main/java/com/belmont/cosmos/CosmosPlaybackService.kt
           package com.belmont.cosmos
 
@@ -229,17 +232,29 @@ jobs:
           import android.content.Context
           import android.content.Intent
           import android.content.pm.ServiceInfo
+          import android.net.wifi.WifiManager
           import android.os.Build
           import android.os.IBinder
           import android.os.PowerManager
+          import android.os.Process
 
           class CosmosPlaybackService : Service() {
               private var wakeLock: PowerManager.WakeLock? = null
+              private var wifiLock: WifiManager.WifiLock? = null
 
               override fun onCreate() {
                   super.onCreate()
+                  try {
+                      Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+                  } catch (_: Exception) {}
+
                   val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-                  wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Cosmos::BluetoothMediaWakeLock").apply {
+                  wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Cosmos::TurboAudioWakeLock").apply {
+                      setReferenceCounted(false)
+                  }
+
+                  val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+                  wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "Cosmos::TurboAudioWifiLock").apply {
                       setReferenceCounted(false)
                   }
               }
@@ -247,13 +262,8 @@ jobs:
               override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
                   val isPlaying = intent?.getBooleanExtra("IS_PLAYING", true) ?: true
                   if (isPlaying) {
-                      if (wakeLock?.isHeld == false) {
-                          wakeLock?.acquire(6 * 60 * 60 * 1000L) // Hasta 6 horas continuas en Bluetooth
-                      }
-                  } else {
-                      if (wakeLock?.isHeld == true) {
-                          wakeLock?.release()
-                      }
+                      if (wakeLock?.isHeld == false) wakeLock?.acquire(12 * 60 * 60 * 1000L)
+                      if (wifiLock?.isHeld == false) wifiLock?.acquire()
                   }
 
                   val notif: Notification? = MainActivity.latestNotification
@@ -270,9 +280,8 @@ jobs:
               }
 
               override fun onDestroy() {
-                  if (wakeLock?.isHeld == true) {
-                      wakeLock?.release()
-                  }
+                  if (wakeLock?.isHeld == true) wakeLock?.release()
+                  if (wifiLock?.isHeld == true) wifiLock?.release()
                   super.onDestroy()
               }
 
@@ -280,7 +289,7 @@ jobs:
           }
           EOF
 
-          # MAINACTIVITY CON KEEP-ALIVE WEBVIEW, AUDIOFOCUS, BLUETOOTH Y COMPARTIR ARCHIVOS
+          # MAINACTIVITY CON CACHE RAM DE PORTADAS (120 FPS), STREAMING 128KB Y EXENCION DE DOZE
           cat << 'EOF' > app/src/main/java/com/belmont/cosmos/MainActivity.kt
           package com.belmont.cosmos
 
@@ -289,8 +298,6 @@ jobs:
           import android.app.NotificationChannel
           import android.app.NotificationManager
           import android.app.PendingIntent
-          import android.bluetooth.BluetoothAdapter
-          import android.bluetooth.BluetoothDevice
           import android.content.BroadcastReceiver
           import android.content.ContentUris
           import android.content.Context
@@ -314,7 +321,10 @@ jobs:
           import android.net.Uri
           import android.os.Build
           import android.os.Bundle
+          import android.os.PowerManager
           import android.provider.MediaStore
+          import android.provider.Settings
+          import android.util.LruCache
           import android.view.View
           import android.webkit.JavascriptInterface
           import android.webkit.WebChromeClient
@@ -329,12 +339,17 @@ jobs:
           import org.json.JSONArray
           import org.json.JSONObject
           import java.io.BufferedInputStream
+          import java.io.ByteArrayInputStream
+          import java.io.ByteArrayOutputStream
           import java.io.FileInputStream
 
-          // WebView especial que jamas entra en suspension cuando apagas la pantalla en Bluetooth
+          // WebView blindado contra suspension de pantalla y modo ahorro Bluetooth
           class CosmosKeepAliveWebView(context: Context) : WebView(context) {
               override fun onWindowVisibilityChanged(visibility: Int) {
                   super.onWindowVisibilityChanged(View.VISIBLE)
+              }
+              override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
+                  super.onWindowFocusChanged(true)
               }
           }
 
@@ -347,8 +362,14 @@ jobs:
               private var mediaSession: MediaSession? = null
               private lateinit var audioManager: AudioManager
               private var focusRequest: AudioFocusRequest? = null
-              private val CHANNEL_ID = "cosmos_2027_media_channel"
+              private val CHANNEL_ID = "cosmos_turbo_media_channel"
               private var fallbackCosmosArt: Bitmap? = null
+              private var fallbackThumbBytes: ByteArray? = null
+
+              // Cache en RAM para miniaturas (evita decodificar imagenes gigantes al hacer scroll)
+              private val thumbCache = object : LruCache<Long, ByteArray>(12 * 1024 * 1024) {
+                  override fun sizeOf(key: Long, value: ByteArray): Int = value.size
+              }
 
               private val mediaActionReceiver = object : BroadcastReceiver() {
                   override fun onReceive(context: Context?, intent: Intent?) {
@@ -356,10 +377,6 @@ jobs:
                           "COSMOS_PREV" -> webView.evaluateJavascript("prevTrack();", null)
                           "COSMOS_TOGGLE" -> webView.evaluateJavascript("togglePlay();", null)
                           "COSMOS_NEXT" -> webView.evaluateJavascript("nextTrack();", null)
-                          AudioManager.ACTION_AUDIO_BECOMING_NOISY -> {
-                              // Solo pausa si se desconectan los audifonos fisicos de golpe
-                              webView.evaluateJavascript("pauseAudio();", null)
-                          }
                       }
                   }
               }
@@ -370,7 +387,10 @@ jobs:
                   window.navigationBarColor = Color.parseColor("#040109")
                   audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
                   fallbackCosmosArt = createCosmosPurpleArtwork()
+                  fallbackThumbBytes = bitmapToJpegBytes(Bitmap.createScaledBitmap(fallbackCosmosArt!!, 140, 140, true), 80)
+
                   setupMediaSessionAndChannel()
+                  requestBatteryOptimizationExemption()
 
                   webView = CosmosKeepAliveWebView(this)
                   webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
@@ -383,29 +403,89 @@ jobs:
                       allowFileAccess = true
                       allowContentAccess = true
                       cacheMode = WebSettings.LOAD_DEFAULT
+                      offscreenPreRaster = true
                   }
                   webView.webChromeClient = WebChromeClient()
                   webView.webViewClient = object : WebViewClient() {
                       override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
-                          val url = request?.url?.toString() ?: return null
+                          val uriObj = request?.url ?: return null
+                          val url = uriObj.toString()
+
                           if (url.startsWith("https://cosmos.local/audio/")) {
-                              val id = url.removePrefix("https://cosmos.local/audio/").toLongOrNull() ?: return null
+                              val id = uriObj.lastPathSegment?.toLongOrNull() ?: return null
                               val contentUri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
                               return serveAudioStreamWithRange(contentUri, request.requestHeaders)
                           }
+
                           if (url.startsWith("https://cosmos.local/albumart/")) {
-                              val albumId = url.removePrefix("https://cosmos.local/albumart/").toLongOrNull() ?: return null
-                              val artUri = ContentUris.withAppendedId(Uri.parse("content://media/external/audio/albumart"), albumId)
-                              return try {
-                                  val stream = contentResolver.openInputStream(artUri) ?: return null
-                                  WebResourceResponse("image/jpeg", "UTF-8", 200, "OK", mapOf("Access-Control-Allow-Origin" to "*"), BufferedInputStream(stream, 32768))
-                              } catch (e: Exception) { null }
+                              val albumId = uriObj.lastPathSegment?.toLongOrNull() ?: return null
+                              val isThumb = uriObj.getQueryParameter("thumb") == "1"
+                              return serveAlbumArtFast(albumId, isThumb)
                           }
                           return super.shouldInterceptRequest(view, request)
                       }
                   }
                   webView.addJavascriptInterface(CosmosBridge(), "CosmosNative")
                   webView.loadUrl("file:///android_asset/index.html")
+              }
+
+              // Pide a Android excluir a COSMOS del modo Doze para que Bluetooth jamas se corte
+              private fun requestBatteryOptimizationExemption() {
+                  try {
+                      val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+                      if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                          val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                              data = Uri.parse("package:$packageName")
+                          }
+                          startActivity(intent)
+                      }
+                  } catch (_: Exception) {}
+              }
+
+              private fun bitmapToJpegBytes(bmp: Bitmap, quality: Int): ByteArray {
+                  val baos = ByteArrayOutputStream()
+                  bmp.compress(Bitmap.CompressFormat.JPEG, quality, baos)
+                  return baos.toByteArray()
+              }
+
+              // Sirve miniaturas ligeras desde RAM en 0ms para lograr 120 FPS al hacer scroll
+              private fun serveAlbumArtFast(albumId: Long, isThumb: Boolean): WebResourceResponse? {
+                  val headers = mapOf(
+                      "Access-Control-Allow-Origin" to "*",
+                      "Cache-Control" to "max-age=31536000, immutable"
+                  )
+                  if (isThumb) {
+                      val cached = thumbCache.get(albumId)
+                      if (cached != null) {
+                          return WebResourceResponse("image/jpeg", null, 200, "OK", headers, ByteArrayInputStream(cached))
+                      }
+                      val artUri = ContentUris.withAppendedId(Uri.parse("content://media/external/audio/albumart"), albumId)
+                      try {
+                          contentResolver.openInputStream(artUri)?.use { stream ->
+                              val opts = BitmapFactory.Options().apply { inSampleSize = 4 }
+                              val decoded = BitmapFactory.decodeStream(stream, null, opts)
+                              if (decoded != null) {
+                                  val scaled = Bitmap.createScaledBitmap(decoded, 140, 140, true)
+                                  val bytes = bitmapToJpegBytes(scaled, 82)
+                                  thumbCache.put(albumId, bytes)
+                                  return WebResourceResponse("image/jpeg", null, 200, "OK", headers, ByteArrayInputStream(bytes))
+                              }
+                          }
+                      } catch (_: Exception) {}
+
+                      val fallback = fallbackThumbBytes ?: return null
+                      thumbCache.put(albumId, fallback)
+                      return WebResourceResponse("image/jpeg", null, 200, "OK", headers, ByteArrayInputStream(fallback))
+                  } else {
+                      val artUri = ContentUris.withAppendedId(Uri.parse("content://media/external/audio/albumart"), albumId)
+                      return try {
+                          val stream = contentResolver.openInputStream(artUri) ?: return null
+                          WebResourceResponse("image/jpeg", null, 200, "OK", headers, BufferedInputStream(stream, 65536))
+                      } catch (e: Exception) {
+                          val fallback = fallbackThumbBytes ?: return null
+                          WebResourceResponse("image/jpeg", null, 200, "OK", headers, ByteArrayInputStream(fallback))
+                      }
+                  }
               }
 
               private fun requestCosmosAudioFocus() {
@@ -421,8 +501,7 @@ jobs:
                       .setOnAudioFocusChangeListener { change ->
                           when (change) {
                               AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
-                                  // Baja ligeramente el volumen en notificaciones sin cortar la musica en Bluetooth
-                                  webView.evaluateJavascript("setDuckVolume(0.35);", null)
+                                  webView.evaluateJavascript("setDuckVolume(0.40);", null)
                               }
                               AudioManager.AUDIOFOCUS_GAIN -> {
                                   webView.evaluateJavascript("setDuckVolume(1.0);", null)
@@ -470,7 +549,8 @@ jobs:
                           }
                       }
 
-                      val buffered = object : BufferedInputStream(fis, 65536) {
+                      // Buffer de 128 KB para lectura ultra estable en Bluetooth
+                      val buffered = object : BufferedInputStream(fis, 131072) {
                           override fun close() {
                               super.close()
                               try { pfd.close() } catch (_: Exception) {}
@@ -528,13 +608,13 @@ jobs:
               }
 
               private fun setupMediaSessionAndChannel() {
-                  val channel = NotificationChannel(CHANNEL_ID, "COSMOS 2027 Audio Engine", NotificationManager.IMPORTANCE_LOW).apply {
+                  val channel = NotificationChannel(CHANNEL_ID, "COSMOS Turbo Audio Engine", NotificationManager.IMPORTANCE_LOW).apply {
                       description = "Reproduccion continua Bluetooth y controles de COSMOS"
                       setShowBadge(false)
                   }
                   getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
 
-                  mediaSession = MediaSession(this, "CosmosBelmont2027Session").apply {
+                  mediaSession = MediaSession(this, "CosmosBelmontTurboSession").apply {
                       setCallback(object : MediaSession.Callback() {
                           override fun onPlay() { runOnUiThread { webView.evaluateJavascript("playAudio();", null) } }
                           override fun onPause() { runOnUiThread { webView.evaluateJavascript("pauseAudio();", null) } }
@@ -549,7 +629,6 @@ jobs:
                       addAction("COSMOS_PREV")
                       addAction("COSMOS_TOGGLE")
                       addAction("COSMOS_NEXT")
-                      addAction(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
                   }
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                       registerReceiver(mediaActionReceiver, filter, Context.RECEIVER_EXPORTED)
@@ -616,6 +695,7 @@ jobs:
                                   put("albumId", albumId)
                                   put("durationMs", durationMs)
                                   put("audioUrl", "https://cosmos.local/audio/$id")
+                                  put("thumb", "https://cosmos.local/albumart/$albumId?thumb=1")
                                   put("cover", "https://cosmos.local/albumart/$albumId")
                               })
                           }
@@ -723,7 +803,6 @@ jobs:
                   latestNotification = notification
                   getSystemService(NotificationManager::class.java).notify(777, notification)
 
-                  // Iniciar y mantener vivo el ForegroundService para que Bluetooth jamas se corte
                   val serviceIntent = Intent(this, CosmosPlaybackService::class.java).apply {
                       putExtra("IS_PLAYING", isPlaying)
                   }
@@ -736,9 +815,14 @@ jobs:
                   } catch (_: Exception) {}
               }
 
-              // Evitar que Android pause el motor de audio del WebView cuando la app pasa a segundo plano
               override fun onPause() {
                   super.onPause()
+                  webView.onResume()
+                  webView.resumeTimers()
+              }
+
+              override fun onStop() {
+                  super.onStop()
                   webView.onResume()
                   webView.resumeTimers()
               }
@@ -751,7 +835,7 @@ jobs:
           }
           EOF
 
-          # INTERFAZ 2027 FLAGSHIP (APPLE MUSIC + SPOTIFY + DEEZER AESTHETIC, LONG-PRESS, SHARE, PLAYLISTS, LIKES)
+          # INTERFAZ 2027 ULTRA-FLUIDA A 120 FPS (CERO BLUR EN FILAS + HIBERNACION DSP EN SEGUNDO PLANO)
           cat << 'EOF' > app/src/main/assets/index.html
           <!DOCTYPE html>
           <html lang="es">
@@ -782,21 +866,18 @@ jobs:
                 -webkit-tap-highlight-color: transparent;
               }
 
-              /* ATMOSFERA 2027 AURORA FLUIDA + MALLA COSMICA */
               .cosmos-bg {
                 background-color: #040109;
                 background-image:
-                  radial-gradient(circle at 18% 0%, rgba(192, 38, 211, 0.28) 0%, transparent 48%),
-                  radial-gradient(circle at 85% 12%, rgba(124, 58, 237, 0.32) 0%, transparent 52%),
-                  radial-gradient(circle at 50% 65%, rgba(217, 70, 239, 0.14) 0%, transparent 55%),
-                  radial-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 0);
-                background-size: 100% 100%, 100% 100%, 100% 100%, 64px 64px;
+                  radial-gradient(circle at 18% 0%, rgba(192, 38, 211, 0.25) 0%, transparent 45%),
+                  radial-gradient(circle at 85% 12%, rgba(124, 58, 237, 0.28) 0%, transparent 50%),
+                  radial-gradient(circle at 50% 65%, rgba(217, 70, 239, 0.12) 0%, transparent 55%);
               }
 
               .digital-cosmos {
                 font-family: 'Share Tech Mono', monospace;
                 letter-spacing: 0.28em;
-                text-shadow: 0 0 16px rgba(217, 70, 239, 0.85), 0 0 28px rgba(147, 51, 234, 0.6);
+                text-shadow: 0 0 14px rgba(217, 70, 239, 0.85);
               }
 
               .belmont-thin {
@@ -805,71 +886,74 @@ jobs:
                 letter-spacing: 0.36em;
               }
 
-              /* TARJETAS DE CRISTAL LIQUIDO 2027 (ESTILO APPLE MUSIC / SPOTIFY) */
-              .glass-2027 {
-                background: linear-gradient(145deg, rgba(28, 12, 52, 0.72) 0%, rgba(11, 4, 22, 0.88) 100%);
-                backdrop-filter: blur(24px);
-                -webkit-backdrop-filter: blur(24px);
-                border: 1px solid rgba(232, 121, 249, 0.18);
-                box-shadow: 0 12px 32px -4px rgba(0, 0, 0, 0.55), inset 0 1px 0 0 rgba(255, 255, 255, 0.10);
+              /* CRISTAL FLOTANTE (SOLO EN HEADER Y MINIPLAYER PARA NO BAJAR FPS) */
+              .glass-bar {
+                background: rgba(16, 6, 30, 0.88);
+                backdrop-filter: blur(16px);
+                -webkit-backdrop-filter: blur(16px);
+                border: 1px solid rgba(232, 121, 249, 0.20);
+              }
+
+              /* TARJETA ACELERADA POR GPU A 120 FPS (SIN BLUR COSTOSO EN CADA CANCION) */
+              .card-2027 {
+                background: linear-gradient(145deg, rgba(28, 12, 52, 0.90) 0%, rgba(12, 4, 24, 0.95) 100%);
+                border: 1px solid rgba(216, 180, 254, 0.14);
+                box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+              }
+
+              .song-row-fast {
+                background: linear-gradient(145deg, rgba(24, 10, 44, 0.88) 0%, rgba(11, 4, 22, 0.94) 100%);
+                border: 1px solid rgba(192, 132, 252, 0.12);
+                content-visibility: auto;
+                contain-intrinsic-size: 68px;
+                transform: translateZ(0);
+              }
+
+              .song-row-active {
+                background: linear-gradient(145deg, rgba(88, 28, 135, 0.65) 0%, rgba(28, 10, 52, 0.95) 100%) !important;
+                border: 1px solid rgba(240, 171, 252, 0.65) !important;
               }
 
               .glass-pill {
-                background: rgba(24, 10, 44, 0.75);
-                backdrop-filter: blur(20px);
-                border: 1px solid rgba(192, 132, 252, 0.22);
+                background: rgba(26, 11, 48, 0.92);
+                border: 1px solid rgba(192, 132, 252, 0.24);
               }
 
               .neon-chord-box {
-                background: linear-gradient(160deg, rgba(126, 34, 206, 0.68) 0%, rgba(15, 5, 29, 0.96) 100%);
+                background: linear-gradient(160deg, rgba(126, 34, 206, 0.72) 0%, rgba(15, 5, 29, 0.98) 100%);
                 border: 1.5px solid #f0abfc;
-                box-shadow: 0 0 28px rgba(217, 70, 239, 0.45), inset 0 0 14px rgba(240, 171, 252, 0.25);
+                box-shadow: 0 0 22px rgba(217, 70, 239, 0.4);
               }
 
-              /* PORTADAS CON SQUIRCLE SUAVE Y HALO DE LUZ ESTILO APPLE MUSIC */
               .cover-2027 {
                 border-radius: 22px;
-                border: 1px solid rgba(255, 255, 255, 0.16);
-                box-shadow: 0 20px 45px -10px rgba(0, 0, 0, 0.8), 0 0 30px rgba(192, 38, 211, 0.28);
+                border: 1px solid rgba(255, 255, 255, 0.18);
+                box-shadow: 0 16px 36px rgba(0, 0, 0, 0.75), 0 0 28px rgba(192, 38, 211, 0.30);
               }
 
               .cover-row {
                 border-radius: 14px;
-                border: 1px solid rgba(232, 121, 249, 0.22);
+                border: 1px solid rgba(232, 121, 249, 0.20);
               }
 
               @keyframes letterGlow {
-                0% { opacity: 0.1; text-shadow: none; transform: translateY(6px) scale(0.95); }
-                50% { opacity: 1; color: #ffffff; text-shadow: 0 0 20px #e879f9, 0 0 38px #a855f7; transform: translateY(0) scale(1.04); }
-                100% { opacity: 1; color: #f3e8ff; text-shadow: 0 0 12px #d946ef, 0 0 24px #7e22ce; transform: translateY(0) scale(1); }
+                0% { opacity: 0.1; transform: translateY(6px); }
+                50% { opacity: 1; color: #ffffff; text-shadow: 0 0 18px #e879f9; transform: translateY(0); }
+                100% { opacity: 1; color: #f3e8ff; text-shadow: 0 0 10px #d946ef; transform: translateY(0); }
               }
 
-              @keyframes floatAmbient {
-                0%, 100% { transform: scale(1) rotate(0deg); opacity: 0.55; }
-                50% { transform: scale(1.12) rotate(4deg); opacity: 0.80; }
-              }
-
-              @keyframes heartPop {
-                0% { transform: scale(1); }
-                40% { transform: scale(1.38); }
-                100% { transform: scale(1); }
-              }
-
-              .animate-heart { animation: heartPop 0.32s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
-              .ambient-halo { animation: floatAmbient 5s ease-in-out infinite; }
-              .splash-letter { display: inline-block; opacity: 0.1; animation: letterGlow 0.9s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+              .splash-letter { display: inline-block; opacity: 0.1; animation: letterGlow 0.8s ease-out forwards; }
 
               .chroma-bar-gpu {
                 transform-origin: bottom;
                 will-change: transform, opacity;
-                transition: transform 60ms linear;
+                transition: transform 55ms linear;
               }
 
-              /* SLIDERS MODERNOS REDONDEADOS ESTILO SPOTIFY */
               input[type="range"] {
                 -webkit-appearance: none;
                 appearance: none;
-                background: rgba(88, 28, 135, 0.45);
+                background: rgba(88, 28, 135, 0.50);
                 height: 5px;
                 border-radius: 999px;
                 outline: none;
@@ -882,7 +966,6 @@ jobs:
                 border-radius: 50%;
                 background: #ffffff;
                 border: 2px solid #e879f9;
-                box-shadow: 0 0 12px #d946ef;
                 cursor: pointer;
               }
 
@@ -892,33 +975,33 @@ jobs:
           <body class="cosmos-bg min-h-screen flex flex-col justify-between pb-44">
 
             <!-- PANTALLA DE BIENVENIDA ANIMADA -->
-            <div id="welcomeSplash" class="fixed inset-0 z-[100] bg-[#040109] flex flex-col items-center justify-center overflow-hidden transition-opacity duration-700">
+            <div id="welcomeSplash" class="fixed inset-0 z-[100] bg-[#040109] flex flex-col items-center justify-center overflow-hidden transition-opacity duration-500">
               <img src="splash_bg.png" onerror="this.style.display='none'" class="absolute inset-0 w-full h-full object-cover opacity-35 pointer-events-none" />
               <div class="relative z-10 flex flex-col items-center px-6">
-                <div class="w-32 h-32 mb-6 rounded-3xl p-1 bg-gradient-to-tr from-purple-600/40 to-fuchsia-500/40 shadow-[0_0_40px_rgba(217,70,239,0.5)] flex items-center justify-center">
+                <div class="w-32 h-32 mb-6 rounded-3xl p-1 bg-gradient-to-tr from-purple-600/40 to-fuchsia-500/40 shadow-[0_0_32px_rgba(217,70,239,0.5)] flex items-center justify-center">
                   <img src="ic_launcher.png" onerror="this.src=window.defaultLogoDataUri" class="w-full h-full rounded-3xl object-contain" />
                 </div>
                 <div class="digital-cosmos text-3xl sm:text-4xl font-bold tracking-[0.35em] flex space-x-2">
-                  <span class="splash-letter" style="animation-delay: 0.08s">C</span>
-                  <span class="splash-letter" style="animation-delay: 0.18s">O</span>
-                  <span class="splash-letter" style="animation-delay: 0.28s">S</span>
-                  <span class="splash-letter" style="animation-delay: 0.38s">M</span>
-                  <span class="splash-letter" style="animation-delay: 0.48s">O</span>
-                  <span class="splash-letter" style="animation-delay: 0.58s">S</span>
+                  <span class="splash-letter" style="animation-delay: 0.05s">C</span>
+                  <span class="splash-letter" style="animation-delay: 0.14s">O</span>
+                  <span class="splash-letter" style="animation-delay: 0.23s">S</span>
+                  <span class="splash-letter" style="animation-delay: 0.32s">M</span>
+                  <span class="splash-letter" style="animation-delay: 0.41s">O</span>
+                  <span class="splash-letter" style="animation-delay: 0.50s">S</span>
                 </div>
-                <p class="belmont-thin text-[10px] text-fuchsia-300/90 uppercase mt-3 tracking-[0.45em] splash-letter" style="animation-delay: 0.75s">
+                <p class="belmont-thin text-[10px] text-fuchsia-300/90 uppercase mt-3 tracking-[0.45em] splash-letter" style="animation-delay: 0.65s">
                   Belmont Edition • 2027
                 </p>
                 <div class="w-48 h-1 rounded-full bg-purple-950 mt-8 overflow-hidden">
-                  <div id="splashBar" class="h-full bg-gradient-to-r from-purple-600 via-fuchsia-400 to-white rounded-full transition-all duration-1000" style="width: 15%"></div>
+                  <div id="splashBar" class="h-full bg-gradient-to-r from-purple-600 via-fuchsia-400 to-white rounded-full transition-all duration-700" style="width: 15%"></div>
                 </div>
               </div>
             </div>
 
             <!-- HEADER FLOTANTE 2027 -->
-            <header class="sticky top-0 z-30 glass-2027 px-4 py-3 flex items-center justify-between border-b border-fuchsia-500/20 rounded-b-3xl">
+            <header class="sticky top-0 z-30 glass-bar px-4 py-3 flex items-center justify-between border-b border-fuchsia-500/20 rounded-b-3xl">
               <div class="flex items-center gap-3">
-                <div class="w-11 h-11 rounded-2xl bg-[#090314] border border-fuchsia-400/50 flex items-center justify-center shadow-[0_0_20px_rgba(217,70,239,0.35)] overflow-hidden">
+                <div class="w-11 h-11 rounded-2xl bg-[#090314] border border-fuchsia-400/50 flex items-center justify-center shadow-[0_0_16px_rgba(217,70,239,0.35)] overflow-hidden">
                   <img id="headerLogoImg" src="ic_launcher.png" class="w-full h-full object-cover" />
                 </div>
                 <div>
@@ -927,14 +1010,14 @@ jobs:
                 </div>
               </div>
               <div class="flex items-center gap-2">
-                <button onclick="openModal('timerModal')" class="px-3 py-1.5 rounded-full glass-pill text-xs text-purple-200 flex items-center gap-1.5 active:scale-95 transition">
+                <button onclick="openModal('timerModal')" class="px-3 py-1.5 rounded-full glass-pill text-xs text-purple-200 flex items-center gap-1.5 active:scale-95">
                   <i class="fa-regular fa-clock text-fuchsia-400 text-[11px]"></i>
                   <span id="timerText" class="text-[10px] font-mono">Off</span>
                 </button>
-                <button onclick="openModal('eqModal')" class="w-9 h-9 rounded-full glass-pill text-purple-200 flex items-center justify-center active:scale-95 transition">
+                <button onclick="openModal('eqModal')" class="w-9 h-9 rounded-full glass-pill text-purple-200 flex items-center justify-center active:scale-95">
                   <i class="fa-solid fa-sliders text-xs text-fuchsia-300"></i>
                 </button>
-                <button onclick="rescanPhoneLibrary()" class="px-3.5 py-1.5 rounded-full bg-gradient-to-r from-purple-600 via-fuchsia-600 to-pink-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-[0_4px_15px_rgba(217,70,239,0.4)] active:scale-95 transition">
+                <button onclick="rescanPhoneLibrary()" class="px-3.5 py-1.5 rounded-full bg-gradient-to-r from-purple-600 via-fuchsia-600 to-pink-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-md active:scale-95">
                   <i class="fa-solid fa-rotate"></i>
                 </button>
               </div>
@@ -944,14 +1027,14 @@ jobs:
             <div class="px-4 pt-3.5">
               <div class="relative">
                 <i class="fa-solid fa-magnifying-glass absolute left-4 top-3.5 text-fuchsia-400/70 text-xs"></i>
-                <input type="text" id="searchInput" oninput="renderLibrary()" placeholder="¿Qué quieres escuchar hoy, Edward?" class="w-full pl-10 pr-4 py-2.5 rounded-full glass-pill text-xs sm:text-sm text-purple-100 placeholder-purple-300/45 focus:outline-none focus:border-fuchsia-400 transition" />
+                <input type="text" id="searchInput" oninput="renderLibrary()" placeholder="¿Qué quieres escuchar hoy, Edward?" class="w-full pl-10 pr-4 py-2.5 rounded-full glass-pill text-xs sm:text-sm text-purple-100 placeholder-purple-300/45 focus:outline-none focus:border-fuchsia-400" />
               </div>
             </div>
 
-            <!-- BENTO GRID DE ACCESO RAPIDO (ESTILO SPOTIFY / APPLE MUSIC 2027) -->
+            <!-- BENTO GRID DE ACCESO RAPIDO -->
             <div class="px-4 pt-3 grid grid-cols-3 gap-2">
-              <button onclick="switchTab('favorites')" class="glass-2027 rounded-2xl p-2.5 flex items-center gap-2.5 active:scale-95 transition text-left">
-                <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-pink-500 via-fuchsia-600 to-purple-800 flex items-center justify-center text-white shadow-md shrink-0">
+              <button onclick="switchTab('favorites')" class="card-2027 rounded-2xl p-2.5 flex items-center gap-2.5 active:scale-95 text-left">
+                <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-pink-500 via-fuchsia-600 to-purple-800 flex items-center justify-center text-white shadow shrink-0">
                   <i class="fa-solid fa-heart text-xs"></i>
                 </div>
                 <div class="min-w-0">
@@ -960,8 +1043,8 @@ jobs:
                 </div>
               </button>
 
-              <button onclick="openCreatePlaylistModal()" class="glass-2027 rounded-2xl p-2.5 flex items-center gap-2.5 active:scale-95 transition text-left">
-                <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-purple-500 to-indigo-800 flex items-center justify-center text-white shadow-md shrink-0">
+              <button onclick="openCreatePlaylistModal()" class="card-2027 rounded-2xl p-2.5 flex items-center gap-2.5 active:scale-95 text-left">
+                <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-purple-500 to-indigo-800 flex items-center justify-center text-white shadow shrink-0">
                   <i class="fa-solid fa-plus text-xs"></i>
                 </div>
                 <div class="min-w-0">
@@ -970,8 +1053,8 @@ jobs:
                 </div>
               </button>
 
-              <button onclick="playRandomMix()" class="glass-2027 rounded-2xl p-2.5 flex items-center gap-2.5 active:scale-95 transition text-left">
-                <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-fuchsia-500 to-purple-700 flex items-center justify-center text-white shadow-md shrink-0">
+              <button onclick="playRandomMix()" class="card-2027 rounded-2xl p-2.5 flex items-center gap-2.5 active:scale-95 text-left">
+                <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-fuchsia-500 to-purple-700 flex items-center justify-center text-white shadow shrink-0">
                   <i class="fa-solid fa-wand-magic-sparkles text-xs"></i>
                 </div>
                 <div class="min-w-0">
@@ -983,19 +1066,19 @@ jobs:
 
             <!-- PILDORAS DE NAVEGACION -->
             <nav class="flex gap-2 px-4 py-3 overflow-x-auto no-scrollbar">
-              <button onclick="switchTab('songs')" id="tab-songs" class="px-4 py-1.5 rounded-full text-xs font-bold bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white shadow-[0_4px_14px_rgba(192,38,211,0.4)] whitespace-nowrap transition">
+              <button onclick="switchTab('songs')" id="tab-songs" class="px-4 py-1.5 rounded-full text-xs font-bold bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white shadow-md whitespace-nowrap flex items-center gap-1">
                 Canciones (<span id="countSongs">0</span>)
               </button>
-              <button onclick="switchTab('favorites')" id="tab-favorites" class="px-4 py-1.5 rounded-full text-xs font-semibold glass-pill text-purple-200/85 whitespace-nowrap transition flex items-center gap-1">
+              <button onclick="switchTab('favorites')" id="tab-favorites" class="px-4 py-1.5 rounded-full text-xs font-semibold glass-pill text-purple-200/85 whitespace-nowrap flex items-center gap-1">
                 <i class="fa-solid fa-heart text-pink-400 text-[10px]"></i> Favoritos
               </button>
-              <button onclick="switchTab('playlists')" id="tab-playlists" class="px-4 py-1.5 rounded-full text-xs font-semibold glass-pill text-purple-200/85 whitespace-nowrap transition">
+              <button onclick="switchTab('playlists')" id="tab-playlists" class="px-4 py-1.5 rounded-full text-xs font-semibold glass-pill text-purple-200/85 whitespace-nowrap flex items-center gap-1">
                 Playlists
               </button>
-              <button onclick="switchTab('artists')" id="tab-artists" class="px-4 py-1.5 rounded-full text-xs font-semibold glass-pill text-purple-200/85 whitespace-nowrap transition">
+              <button onclick="switchTab('artists')" id="tab-artists" class="px-4 py-1.5 rounded-full text-xs font-semibold glass-pill text-purple-200/85 whitespace-nowrap flex items-center gap-1">
                 Artistas
               </button>
-              <button onclick="switchTab('albums')" id="tab-albums" class="px-4 py-1.5 rounded-full text-xs font-semibold glass-pill text-purple-200/85 whitespace-nowrap transition">
+              <button onclick="switchTab('albums')" id="tab-albums" class="px-4 py-1.5 rounded-full text-xs font-semibold glass-pill text-purple-200/85 whitespace-nowrap flex items-center gap-1">
                 Álbumes
               </button>
             </nav>
@@ -1004,36 +1087,36 @@ jobs:
               <span>💡 Mantén presionada una canción para Compartir o Añadir a Playlist</span>
             </div>
 
-            <!-- CONTENEDOR PRINCIPAL DE BIBLIOTECA -->
+            <!-- CONTENEDOR PRINCIPAL DE BIBLIOTECA A 120 FPS -->
             <main id="libraryContainer" class="px-4 flex-1 space-y-2 overflow-y-auto"></main>
 
             <footer class="mt-6 mb-2 text-center pointer-events-none">
               <p class="belmont-thin text-[8px] uppercase text-purple-300 opacity-35">Desarrollado por Edward Belmont</p>
             </footer>
 
-            <!-- MINI REPRODUCTOR CAPSULA FLOTANTE 2027 -->
+            <!-- MINI REPRODUCTOR CAPSULA FLOTANTE -->
             <div class="fixed bottom-3 left-3 right-3 z-40">
-              <div class="glass-2027 rounded-3xl p-3 border border-fuchsia-400/30 shadow-[0_16px_40px_rgba(0,0,0,0.85)]">
+              <div class="glass-bar rounded-3xl p-3 border border-fuchsia-400/30 shadow-[0_14px_34px_rgba(0,0,0,0.85)]">
                 <div class="flex items-center justify-between gap-2.5">
                   <div class="flex items-center gap-3 flex-1 min-w-0 cursor-pointer" onclick="openModal('playerModal')">
-                    <img id="miniCover" src="" class="w-13 h-13 w-[52px] h-[52px] cover-row object-cover bg-purple-950/60 shrink-0 shadow-md" />
+                    <img id="miniCover" src="" class="w-[52px] h-[52px] cover-row object-cover bg-purple-950/60 shrink-0 shadow" />
                     <div class="min-w-0 flex-1">
                       <div class="flex items-center gap-1.5">
                         <h3 id="miniTitle" class="font-bold text-sm text-white truncate">Selecciona una pista</h3>
-                        <span id="miniChordBadge" class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-fuchsia-600/90 text-white border border-fuchsia-300/50 font-mono shrink-0">--</span>
+                        <span id="miniChordBadge" class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-fuchsia-600 text-white border border-fuchsia-300/50 font-mono shrink-0">--</span>
                       </div>
                       <div class="flex items-center gap-2 mt-0.5">
                         <p id="miniArtist" class="text-xs text-purple-200/75 truncate">COSMOS 2027</p>
-                        <span id="miniBpmBadge" class="text-[9px] font-mono text-fuchsia-300/90 bg-purple-950/80 px-1.5 py-0.2 rounded-full border border-purple-700/40 shrink-0">-- BPM</span>
+                        <span id="miniBpmBadge" class="text-[9px] font-mono text-fuchsia-300 bg-purple-950 px-1.5 py-0.2 rounded-full border border-purple-700/40 shrink-0">-- BPM</span>
                       </div>
                     </div>
                   </div>
                   <div class="flex items-center gap-1">
-                    <button onclick="toggleLikeCurrent()" id="miniLikeBtn" class="w-8 h-8 rounded-full flex items-center justify-center text-purple-300/70 active:scale-90 transition">
+                    <button onclick="toggleLikeCurrent()" id="miniLikeBtn" class="w-8 h-8 rounded-full flex items-center justify-center text-purple-300/70 active:scale-90">
                       <i class="fa-regular fa-heart text-sm"></i>
                     </button>
                     <button onclick="prevTrack()" class="w-8 h-8 rounded-full flex items-center justify-center text-purple-200 active:scale-90"><i class="fa-solid fa-backward-step"></i></button>
-                    <button onclick="togglePlay()" id="miniPlayBtn" class="w-11 h-11 rounded-full bg-gradient-to-tr from-purple-600 via-fuchsia-500 to-pink-500 text-white flex items-center justify-center shadow-[0_0_18px_rgba(217,70,239,0.5)] active:scale-95 transition"><i class="fa-solid fa-play text-sm"></i></button>
+                    <button onclick="togglePlay()" id="miniPlayBtn" class="w-11 h-11 rounded-full bg-gradient-to-tr from-purple-600 via-fuchsia-500 to-pink-500 text-white flex items-center justify-center shadow-md active:scale-95"><i class="fa-solid fa-play text-sm"></i></button>
                     <button onclick="nextTrack()" class="w-8 h-8 rounded-full flex items-center justify-center text-purple-200 active:scale-90"><i class="fa-solid fa-forward-step"></i></button>
                   </div>
                 </div>
@@ -1045,38 +1128,36 @@ jobs:
               </div>
             </div>
 
-            <!-- MODAL REPRODUCTOR COMPLETO 2027 (CON HALO AMBIENTAL + COMPARTIR + PLAYLIST + ACORDES + BPM) -->
+            <!-- MODAL REPRODUCTOR COMPLETO 2027 -->
             <div id="playerModal" class="fixed inset-0 z-50 cosmos-bg hidden flex-col justify-between p-4 sm:p-6 overflow-y-auto">
-              <!-- Barra Superior del Reproductor -->
               <div class="flex items-center justify-between relative z-10">
-                <button onclick="closeModal('playerModal')" class="w-10 h-10 rounded-full glass-pill text-purple-100 flex items-center justify-center active:scale-90 transition">
+                <button onclick="closeModal('playerModal')" class="w-10 h-10 rounded-full glass-pill text-purple-100 flex items-center justify-center active:scale-90">
                   <i class="fa-solid fa-chevron-down text-sm"></i>
                 </button>
                 <div class="text-center">
                   <span class="digital-cosmos text-[10px] uppercase text-fuchsia-300 block">COSMOS 2027</span>
                   <span id="fullAlbumName" class="text-xs font-semibold text-purple-200/90 truncate max-w-[200px] block">Álbum</span>
                 </div>
-                <button onclick="openActionSheet(currentTrackIndex)" class="w-10 h-10 rounded-full glass-pill text-purple-100 flex items-center justify-center active:scale-90 transition">
+                <button onclick="openActionSheet(currentTrackIndex)" class="w-10 h-10 rounded-full glass-pill text-purple-100 flex items-center justify-center active:scale-90">
                   <i class="fa-solid fa-ellipsis-vertical text-sm"></i>
                 </button>
               </div>
 
-              <!-- Portada con Luz Ambiental + Panel DSP -->
               <div class="flex-1 flex flex-col items-center justify-center space-y-4 my-2 relative">
                 <div class="relative flex items-center justify-center">
-                  <img id="ambientCoverBlur" src="" class="absolute w-64 h-64 rounded-full object-cover blur-3xl opacity-55 ambient-halo pointer-events-none" />
+                  <div class="absolute w-64 h-64 rounded-full bg-gradient-to-tr from-purple-700/35 via-fuchsia-500/30 to-pink-500/25 blur-2xl pointer-events-none"></div>
                   <img id="fullCover" src="" oncontextmenu="openActionSheet(currentTrackIndex); return false;" class="relative z-10 w-60 h-60 sm:w-68 sm:h-68 cover-2027 object-cover bg-purple-950/50" />
                 </div>
 
                 <!-- PANEL STUDIO DSP: DETECTOR DE ACORDES DE GUITARRA + METRONOMO AUTO-BPM -->
-                <div class="w-full max-w-md glass-2027 rounded-3xl p-3.5 space-y-3 relative z-10">
+                <div class="w-full max-w-md card-2027 rounded-3xl p-3.5 space-y-3 relative z-10">
                   <div>
                     <div class="flex items-center justify-between mb-1.5">
                       <div class="flex items-center gap-2">
-                        <span class="w-2 h-2 rounded-full bg-fuchsia-400 animate-pulse"></span>
+                        <span class="w-2 h-2 rounded-full bg-fuchsia-400"></span>
                         <span class="text-[10px] font-bold uppercase tracking-wider text-purple-100">Acordes de Guitarra en Vivo</span>
                       </div>
-                      <button onclick="toggleChordMode()" id="chordModeBtn" class="px-3 py-0.5 rounded-full bg-purple-900/90 border border-fuchsia-400/50 text-[10px] text-purple-100 font-semibold">Tríadas (m/Maj)</button>
+                      <button onclick="toggleChordMode()" id="chordModeBtn" class="px-3 py-0.5 rounded-full bg-purple-900 border border-fuchsia-400/50 text-[10px] text-purple-100 font-semibold">Tríadas (m/Maj)</button>
                     </div>
                     <div class="w-full bg-black/50 h-1.5 rounded-full overflow-hidden mb-2.5 border border-purple-900/40">
                       <div id="measureLockBar" class="bg-gradient-to-r from-purple-600 via-fuchsia-400 to-white h-full rounded-full" style="width: 0%"></div>
@@ -1111,10 +1192,10 @@ jobs:
                         <span class="text-[8px] uppercase text-purple-300 block">BPM Auto</span>
                       </div>
                       <div class="flex items-center gap-1.5 px-2.5 py-2 rounded-xl bg-black/40 border border-purple-900/40">
-                        <span id="beat-0" class="w-2.5 h-2.5 rounded-full bg-purple-900 border border-purple-500/40 transition-transform"></span>
-                        <span id="beat-1" class="w-2.5 h-2.5 rounded-full bg-purple-900 border border-purple-500/40 transition-transform"></span>
-                        <span id="beat-2" class="w-2.5 h-2.5 rounded-full bg-purple-900 border border-purple-500/40 transition-transform"></span>
-                        <span id="beat-3" class="w-2.5 h-2.5 rounded-full bg-purple-900 border border-purple-500/40 transition-transform"></span>
+                        <span id="beat-0" class="w-2.5 h-2.5 rounded-full bg-purple-900 border border-purple-500/40"></span>
+                        <span id="beat-1" class="w-2.5 h-2.5 rounded-full bg-purple-900 border border-purple-500/40"></span>
+                        <span id="beat-2" class="w-2.5 h-2.5 rounded-full bg-purple-900 border border-purple-500/40"></span>
+                        <span id="beat-3" class="w-2.5 h-2.5 rounded-full bg-purple-900 border border-purple-500/40"></span>
                       </div>
                     </div>
                     <div class="flex items-center gap-1">
@@ -1129,7 +1210,7 @@ jobs:
                 </div>
               </div>
 
-              <!-- Info de Pista + Botones Rápidos (Like, Playlist, Compartir, EQ) -->
+              <!-- Info de Pista + Botones Rápidos -->
               <div class="space-y-3 pt-1 relative z-10">
                 <div class="flex items-center justify-between gap-2">
                   <div class="min-w-0 flex-1">
@@ -1137,13 +1218,13 @@ jobs:
                     <p id="fullArtist" class="text-xs sm:text-sm text-fuchsia-200/80 truncate">--</p>
                   </div>
                   <div class="flex items-center gap-1.5 shrink-0">
-                    <button onclick="toggleLikeCurrent()" id="fullLikeBtn" class="w-9 h-9 rounded-full glass-pill flex items-center justify-center text-purple-200 active:scale-90 transition">
+                    <button onclick="toggleLikeCurrent()" id="fullLikeBtn" class="w-9 h-9 rounded-full glass-pill flex items-center justify-center text-purple-200 active:scale-90">
                       <i class="fa-regular fa-heart text-base"></i>
                     </button>
-                    <button onclick="openAddToPlaylistModal(currentTrackIndex)" class="w-9 h-9 rounded-full glass-pill flex items-center justify-center text-purple-200 active:scale-90 transition" title="Añadir a Playlist">
+                    <button onclick="openAddToPlaylistModal(currentTrackIndex)" class="w-9 h-9 rounded-full glass-pill flex items-center justify-center text-purple-200 active:scale-90" title="Añadir a Playlist">
                       <i class="fa-solid fa-folder-plus text-sm text-fuchsia-300"></i>
                     </button>
-                    <button onclick="shareTrack(currentTrackIndex)" class="w-9 h-9 rounded-full glass-pill flex items-center justify-center text-purple-200 active:scale-90 transition" title="Compartir">
+                    <button onclick="shareTrack(currentTrackIndex)" class="w-9 h-9 rounded-full glass-pill flex items-center justify-center text-purple-200 active:scale-90" title="Compartir">
                       <i class="fa-solid fa-share-nodes text-sm text-fuchsia-300"></i>
                     </button>
                     <button onclick="openModal('eqModal')" id="fullGenreBadge" class="px-3 py-1.5 rounded-full text-[10px] glass-pill text-fuchsia-200 font-mono font-bold">
@@ -1163,16 +1244,16 @@ jobs:
                 <div class="flex items-center justify-between px-2 pt-1">
                   <button onclick="toggleShuffle()" id="shuffleBtn" class="w-10 h-10 rounded-full flex items-center justify-center text-purple-400/50 active:scale-90"><i class="fa-solid fa-shuffle text-base"></i></button>
                   <button onclick="prevTrack()" class="w-12 h-12 rounded-full glass-pill flex items-center justify-center text-white text-lg active:scale-90"><i class="fa-solid fa-backward-step"></i></button>
-                  <button onclick="togglePlay()" id="fullPlayBtn" class="w-16 h-16 rounded-full bg-gradient-to-tr from-purple-600 via-fuchsia-500 to-pink-500 text-white flex items-center justify-center text-2xl shadow-[0_0_28px_rgba(217,70,239,0.65)] active:scale-95 transition"><i class="fa-solid fa-play"></i></button>
+                  <button onclick="togglePlay()" id="fullPlayBtn" class="w-16 h-16 rounded-full bg-gradient-to-tr from-purple-600 via-fuchsia-500 to-pink-500 text-white flex items-center justify-center text-2xl shadow-[0_0_24px_rgba(217,70,239,0.6)] active:scale-95"><i class="fa-solid fa-play"></i></button>
                   <button onclick="nextTrack()" class="w-12 h-12 rounded-full glass-pill flex items-center justify-center text-white text-lg active:scale-90"><i class="fa-solid fa-forward-step"></i></button>
                   <button onclick="cycleRepeat()" id="repeatBtn" class="w-10 h-10 rounded-full flex items-center justify-center text-purple-400/50 relative active:scale-90"><i class="fa-solid fa-repeat text-base"></i><span id="repeatOneBadge" class="hidden absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full bg-fuchsia-400 text-[10px] font-bold text-black flex items-center justify-center">1</span></button>
                 </div>
               </div>
             </div>
 
-            <!-- MENU CONTEXTUAL (BOTTOM SHEET AL MANTENER PRESIONADO O TOCAR 3 PUNTOS) -->
-            <div id="actionSheetModal" class="fixed inset-0 z-[70] bg-black/75 backdrop-blur-md hidden items-end justify-center" onclick="if(event.target===this) closeModal('actionSheetModal')">
-              <div class="glass-2027 w-full max-w-md rounded-t-3xl p-5 space-y-4 border-t border-fuchsia-400/40 pb-8">
+            <!-- MENU CONTEXTUAL (BOTTOM SHEET) -->
+            <div id="actionSheetModal" class="fixed inset-0 z-[70] bg-black/80 hidden items-end justify-center" onclick="if(event.target===this) closeModal('actionSheetModal')">
+              <div class="card-2027 w-full max-w-md rounded-t-3xl p-5 space-y-4 border-t border-fuchsia-400/40 pb-8">
                 <div class="w-12 h-1.5 bg-purple-400/30 rounded-full mx-auto"></div>
                 <div class="flex items-center gap-3.5 pb-3 border-b border-purple-800/40">
                   <img id="sheetTrackCover" src="" class="w-14 h-14 cover-row object-cover shrink-0" />
@@ -1182,19 +1263,19 @@ jobs:
                   </div>
                 </div>
                 <div class="space-y-2 text-xs font-semibold">
-                  <button onclick="sheetToggleLike()" class="w-full p-3.5 rounded-2xl glass-pill flex items-center gap-3.5 text-left text-purple-100 active:scale-98 transition">
+                  <button onclick="sheetToggleLike()" class="w-full p-3.5 rounded-2xl glass-pill flex items-center gap-3.5 text-left text-purple-100 active:scale-98">
                     <i id="sheetLikeIcon" class="fa-regular fa-heart text-pink-400 text-base w-5 text-center"></i>
                     <span id="sheetLikeText">Añadir a Tus Me Gusta</span>
                   </button>
-                  <button onclick="sheetAddToPlaylist()" class="w-full p-3.5 rounded-2xl glass-pill flex items-center gap-3.5 text-left text-purple-100 active:scale-98 transition">
+                  <button onclick="sheetAddToPlaylist()" class="w-full p-3.5 rounded-2xl glass-pill flex items-center gap-3.5 text-left text-purple-100 active:scale-98">
                     <i class="fa-solid fa-list-ul text-fuchsia-400 text-base w-5 text-center"></i>
                     <span>Añadir a una Playlist...</span>
                   </button>
-                  <button onclick="sheetShareTrack()" class="w-full p-3.5 rounded-2xl glass-pill flex items-center gap-3.5 text-left text-purple-100 active:scale-98 transition">
+                  <button onclick="sheetShareTrack()" class="w-full p-3.5 rounded-2xl glass-pill flex items-center gap-3.5 text-left text-purple-100 active:scale-98">
                     <i class="fa-solid fa-share-nodes text-purple-400 text-base w-5 text-center"></i>
                     <span>Compartir canción (WhatsApp, Bluetooth, etc.)</span>
                   </button>
-                  <button onclick="sheetEditTrack()" class="w-full p-3.5 rounded-2xl glass-pill flex items-center gap-3.5 text-left text-purple-100 active:scale-98 transition">
+                  <button onclick="sheetEditTrack()" class="w-full p-3.5 rounded-2xl glass-pill flex items-center gap-3.5 text-left text-purple-100 active:scale-98">
                     <i class="fa-solid fa-pen-to-square text-fuchsia-300 text-base w-5 text-center"></i>
                     <span>Editar nombre, artista o portada</span>
                   </button>
@@ -1203,8 +1284,8 @@ jobs:
             </div>
 
             <!-- MODAL SELECCIONAR / AÑADIR A PLAYLIST -->
-            <div id="addToPlaylistModal" class="fixed inset-0 z-[75] bg-black/80 backdrop-blur-md hidden items-center justify-center p-4">
-              <div class="glass-2027 rounded-3xl w-full max-w-md p-5 space-y-4">
+            <div id="addToPlaylistModal" class="fixed inset-0 z-[75] bg-black/80 hidden items-center justify-center p-4">
+              <div class="card-2027 rounded-3xl w-full max-w-md p-5 space-y-4">
                 <div class="flex justify-between items-center border-b border-purple-800/40 pb-2.5">
                   <h3 class="font-bold text-sm text-white">Añadir a Playlist</h3>
                   <button onclick="closeModal('addToPlaylistModal')" class="text-purple-300"><i class="fa-solid fa-xmark"></i></button>
@@ -1217,15 +1298,15 @@ jobs:
             </div>
 
             <!-- MODAL CREAR NUEVA PLAYLIST -->
-            <div id="createPlaylistModal" class="fixed inset-0 z-[80] bg-black/80 backdrop-blur-md hidden items-center justify-center p-4">
-              <div class="glass-2027 rounded-3xl w-full max-w-sm p-5 space-y-4">
+            <div id="createPlaylistModal" class="fixed inset-0 z-[80] bg-black/80 hidden items-center justify-center p-4">
+              <div class="card-2027 rounded-3xl w-full max-w-sm p-5 space-y-4">
                 <div class="flex justify-between items-center border-b border-purple-800/40 pb-2">
                   <h3 class="font-bold text-sm text-white">Nueva Playlist</h3>
                   <button onclick="closeModal('createPlaylistModal')" class="text-purple-300"><i class="fa-solid fa-xmark"></i></button>
                 </div>
                 <div>
                   <label class="text-xs text-purple-300/80 block mb-1.5">Nombre de tu Playlist</label>
-                  <input type="text" id="newPlaylistNameInput" placeholder="Ej. Noche Gótica, Gym, Favoritas de Ale..." class="w-full p-3 rounded-2xl bg-purple-950/90 border border-purple-600/50 text-sm text-white focus:outline-none focus:border-fuchsia-400" />
+                  <input type="text" id="newPlaylistNameInput" placeholder="Ej. Noche Gótica, Gym, Favoritas de Ale..." class="w-full p-3 rounded-2xl bg-purple-950 border border-purple-600/50 text-sm text-white focus:outline-none focus:border-fuchsia-400" />
                 </div>
                 <div class="flex justify-end gap-2 pt-1">
                   <button onclick="closeModal('createPlaylistModal')" class="px-4 py-2 rounded-full glass-pill text-purple-300 text-xs">Cancelar</button>
@@ -1235,17 +1316,17 @@ jobs:
             </div>
 
             <!-- MODAL EDITAR CANCION -->
-            <div id="editModal" class="fixed inset-0 z-[75] bg-black/85 backdrop-blur-md hidden items-center justify-center p-4">
-              <div class="glass-2027 rounded-3xl w-full max-w-md p-5 space-y-3.5">
+            <div id="editModal" class="fixed inset-0 z-[75] bg-black/85 hidden items-center justify-center p-4">
+              <div class="card-2027 rounded-3xl w-full max-w-md p-5 space-y-3.5">
                 <div class="flex justify-between items-center border-b border-purple-800/40 pb-2">
                   <h3 class="font-bold text-sm text-purple-100">Modificar Información y Portada</h3>
                   <button onclick="closeModal('editModal')" class="text-purple-400"><i class="fa-solid fa-xmark"></i></button>
                 </div>
                 <div class="space-y-3 text-xs">
-                  <div><label class="text-purple-300/80 block mb-1">Nombre</label><input type="text" id="editTitle" class="w-full p-2.5 rounded-2xl bg-purple-950/90 border border-purple-700/50 text-white" /></div>
+                  <div><label class="text-purple-300/80 block mb-1">Nombre</label><input type="text" id="editTitle" class="w-full p-2.5 rounded-2xl bg-purple-950 border border-purple-700/50 text-white" /></div>
                   <div class="grid grid-cols-2 gap-2">
-                    <div><label class="text-purple-300/80 block mb-1">Artista</label><input type="text" id="editArtist" class="w-full p-2.5 rounded-2xl bg-purple-950/90 border border-purple-700/50 text-white" /></div>
-                    <div><label class="text-purple-300/80 block mb-1">Álbum</label><input type="text" id="editAlbum" class="w-full p-2.5 rounded-2xl bg-purple-950/90 border border-purple-700/50 text-white" /></div>
+                    <div><label class="text-purple-300/80 block mb-1">Artista</label><input type="text" id="editArtist" class="w-full p-2.5 rounded-2xl bg-purple-950 border border-purple-700/50 text-white" /></div>
+                    <div><label class="text-purple-300/80 block mb-1">Álbum</label><input type="text" id="editAlbum" class="w-full p-2.5 rounded-2xl bg-purple-950 border border-purple-700/50 text-white" /></div>
                   </div>
                   <div><label class="text-purple-300/80 block mb-1">Cambiar Portada</label><input type="file" id="editCoverFile" accept="image/*" class="w-full text-[11px] text-purple-300 file:mr-2 file:py-1.5 file:px-3 file:rounded-full file:border-0 file:bg-purple-700 file:text-white" /></div>
                 </div>
@@ -1257,8 +1338,8 @@ jobs:
             </div>
 
             <!-- MODAL ECUALIZADOR DE 16 GENEROS -->
-            <div id="eqModal" class="fixed inset-0 z-[75] bg-black/85 backdrop-blur-md hidden items-center justify-center p-4">
-              <div class="glass-2027 rounded-3xl w-full max-w-md p-5 space-y-4 max-h-[90vh] overflow-y-auto">
+            <div id="eqModal" class="fixed inset-0 z-[75] bg-black/85 hidden items-center justify-center p-4">
+              <div class="card-2027 rounded-3xl w-full max-w-md p-5 space-y-4 max-h-[90vh] overflow-y-auto">
                 <div class="flex justify-between items-center border-b border-purple-800/40 pb-2">
                   <h3 class="font-bold text-sm text-purple-100">Ecualizador Master DSP (16 Géneros)</h3>
                   <button onclick="closeModal('eqModal')" class="text-purple-400"><i class="fa-solid fa-xmark"></i></button>
@@ -1275,8 +1356,8 @@ jobs:
             </div>
 
             <!-- MODAL TEMPORIZADOR -->
-            <div id="timerModal" class="fixed inset-0 z-[75] bg-black/85 backdrop-blur-md hidden items-center justify-center p-4">
-              <div class="glass-2027 rounded-3xl w-full max-w-sm p-5 space-y-3 text-center">
+            <div id="timerModal" class="fixed inset-0 z-[75] bg-black/85 hidden items-center justify-center p-4">
+              <div class="card-2027 rounded-3xl w-full max-w-sm p-5 space-y-3 text-center">
                 <div class="flex justify-between items-center border-b border-purple-800/40 pb-2">
                   <h3 class="font-bold text-sm text-purple-100">Temporizador de Apagado</h3>
                   <button onclick="closeModal('timerModal')" class="text-purple-400"><i class="fa-solid fa-xmark"></i></button>
@@ -1290,8 +1371,8 @@ jobs:
               </div>
             </div>
 
-            <!-- TOAST FLOTANTE DE CONFIRMACION -->
-            <div id="cosmosToast" class="fixed top-20 left-1/2 -translate-x-1/2 z-[90] px-4 py-2 rounded-full bg-gradient-to-r from-purple-700 to-fuchsia-600 text-white text-xs font-bold shadow-[0_8px_25px_rgba(217,70,239,0.5)] opacity-0 pointer-events-none transition-opacity duration-300">
+            <!-- TOAST FLOTANTE -->
+            <div id="cosmosToast" class="fixed top-20 left-1/2 -translate-x-1/2 z-[90] px-4 py-2 rounded-full bg-gradient-to-r from-purple-700 to-fuchsia-600 text-white text-xs font-bold shadow-lg opacity-0 pointer-events-none transition-opacity duration-200">
               Listo
             </div>
 
@@ -1312,14 +1393,14 @@ jobs:
 
               let currentTab = "songs", currentTrackIndex = -1, actionSheetTrackIdx = -1, pendingAddTrackIdx = -1;
               let activePlaylistViewId = null;
-              let isPlaying = false, shuffleMode = false, repeatMode = 0;
+              let isPlaying = false, isPlayerModalOpen = false, shuffleMode = false, repeatMode = 0;
               let activePresetName = "Space Rock", sleepTimerId = null;
 
               function showToast(msg) {
                 const t = document.getElementById("cosmosToast");
                 t.textContent = msg;
                 t.style.opacity = "1";
-                setTimeout(() => { t.style.opacity = "0"; }, 2200);
+                setTimeout(() => { t.style.opacity = "0"; }, 2000);
               }
 
               function updateBentoCounters() {
@@ -1374,6 +1455,7 @@ jobs:
                       album: saved.album || item.album,
                       albumId: item.albumId !== undefined ? item.albumId : -1,
                       durationMs: item.durationMs || 0,
+                      thumb: saved.cover || item.thumb || item.cover || "ic_launcher.png",
                       cover: saved.cover || item.cover || "ic_launcher.png",
                       audioUrl: item.audioUrl
                     };
@@ -1396,7 +1478,7 @@ jobs:
               }
 
               // =========================================================================
-              // SISTEMA DE ME GUSTA (LIKES), PLAYLISTS Y COMPARTIR NATIVO
+              // SISTEMA DE ME GUSTA (ACTUALIZACION O(1) SIN RE-RENDERIZAR TODA LA LISTA)
               // =========================================================================
               function isTrackLiked(trackId) {
                 return likedTrackIds.includes(trackId);
@@ -1407,6 +1489,7 @@ jobs:
                 const t = tracks[idx];
                 if (!t) return;
                 const pos = likedTrackIds.indexOf(t.id);
+                const nowLiked = pos === -1;
                 if (pos >= 0) {
                   likedTrackIds.splice(pos, 1);
                   showToast("Quitado de Tus Me Gusta");
@@ -1417,7 +1500,14 @@ jobs:
                 localStorage.setItem("cosmos_likes_2027", JSON.stringify(likedTrackIds));
                 updateLikeButtonsUI();
                 updateBentoCounters();
-                renderLibrary();
+
+                // Actualizar solo el boton de esa fila sin reconstruir el DOM
+                const rowHeartBtn = document.getElementById(`row-like-btn-${idx}`);
+                if (rowHeartBtn) {
+                  rowHeartBtn.className = `w-8 h-8 rounded-full flex items-center justify-center ${nowLiked ? 'text-pink-500' : 'text-purple-300/50'}`;
+                  rowHeartBtn.innerHTML = `<i class="${nowLiked ? 'fa-solid' : 'fa-regular'} fa-heart text-xs"></i>`;
+                }
+                if (currentTab === "favorites") renderLibrary();
               }
 
               function toggleLikeCurrent() {
@@ -1430,7 +1520,7 @@ jobs:
                 const miniBtn = document.getElementById("miniLikeBtn");
                 const fullBtn = document.getElementById("fullLikeBtn");
                 const iconHtml = liked
-                  ? '<i class="fa-solid fa-heart text-pink-500 animate-heart"></i>'
+                  ? '<i class="fa-solid fa-heart text-pink-500"></i>'
                   : '<i class="fa-regular fa-heart"></i>';
                 if (miniBtn) miniBtn.innerHTML = iconHtml;
                 if (fullBtn) fullBtn.innerHTML = iconHtml;
@@ -1440,8 +1530,8 @@ jobs:
                 if (idx < 0 || !tracks[idx]) return;
                 actionSheetTrackIdx = idx;
                 const t = tracks[idx];
-                if (navigator.vibrate) navigator.vibrate(25);
-                setImageWithFallback(document.getElementById("sheetTrackCover"), t.cover);
+                if (navigator.vibrate) navigator.vibrate(20);
+                setImageWithFallback(document.getElementById("sheetTrackCover"), t.thumb);
                 document.getElementById("sheetTrackTitle").textContent = t.title;
                 document.getElementById("sheetTrackArtist").textContent = `${t.artist} • ${t.album}`;
                 const liked = isTrackLiked(t.id);
@@ -1506,7 +1596,7 @@ jobs:
                 pendingAddTrackIdx = -1;
                 updateBentoCounters();
                 closeModal("createPlaylistModal");
-                renderLibrary();
+                if (currentTab === "playlists") renderLibrary();
               }
 
               function openAddToPlaylistModal(idx) {
@@ -1519,7 +1609,7 @@ jobs:
                 userPlaylists.forEach(pl => {
                   const alreadyIn = pl.tracks.includes(trackId);
                   const btn = document.createElement("button");
-                  btn.className = "w-full p-3 rounded-2xl glass-pill flex items-center justify-between text-left active:scale-98 transition";
+                  btn.className = "w-full p-3 rounded-2xl glass-pill flex items-center justify-between text-left active:scale-98";
                   btn.innerHTML = `
                     <div class="flex items-center gap-3 min-w-0">
                       <div class="w-9 h-9 rounded-xl bg-purple-900/80 border border-fuchsia-400/30 flex items-center justify-center text-fuchsia-300 shrink-0">
@@ -1541,7 +1631,7 @@ jobs:
                       showToast(`Ya estaba en "${pl.name}"`);
                     }
                     closeModal("addToPlaylistModal");
-                    renderLibrary();
+                    if (currentTab === "playlists") renderLibrary();
                   };
                   listEl.appendChild(btn);
                 });
@@ -1577,13 +1667,14 @@ jobs:
               }
 
               // =========================================================================
-              // MOTOR DE AUDIO SIN LAG + DUCKING + ACORDES + AUTO-BPM
+              // MOTOR DE AUDIO TURBO (TABLA LUT PRECALCULADA + HIBERNACION EN BLUETOOTH)
               // =========================================================================
               let audioCtx = null, analyser = null, mediaSource = null, masterGainNode = null, isSourceConnected = false, eqFilters = [];
               let chordDetectionMode = "triad";
               const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
               let smoothedRoot = new Float32Array(12), smoothedChroma = new Float32Array(12);
               let fftDbBuffer = null, chromaBarEls = [];
+              let binPitchLut = null, binRootWeightLut = null, minGuitarBin = 2, maxGuitarBin = 100;
               let lockedPitch = -1, lockedQuality = "", prevChordName = "--", lockTime = 0, challenger = -1, challengerCount = 0;
               const HOLD_MS = 1350;
               const audioEl = document.getElementById("audioElement");
@@ -1600,17 +1691,38 @@ jobs:
                 }
               };
 
+              function buildFastGuitarLookupTable(sampleRate, fftSize) {
+                const binCount = fftSize / 2;
+                const binW = sampleRate / fftSize;
+                binPitchLut = new Int8Array(binCount);
+                binRootWeightLut = new Float32Array(binCount);
+                minGuitarBin = Math.max(2, Math.floor(65 / binW));
+                maxGuitarBin = Math.min(binCount - 3, Math.ceil(780 / binW));
+
+                for (let b = minGuitarBin; b <= maxGuitarBin; b++) {
+                  const freq = b * binW;
+                  const p = ((Math.round(12 * Math.log2(freq / 440) + 69) % 12) + 12) % 12;
+                  binPitchLut[b] = p;
+                  if (freq >= 78 && freq <= 400) {
+                    binRootWeightLut[b] = freq < 220 ? 1.75 : 1.25;
+                  } else {
+                    binRootWeightLut[b] = 0;
+                  }
+                }
+              }
+
               function initAudioEngine() {
                 if (!audioCtx) {
                   try {
                     const AC = window.AudioContext || window.webkitAudioContext;
                     audioCtx = new AC({ latencyHint: "playback", sampleRate: 48000 });
                     analyser = audioCtx.createAnalyser();
-                    analyser.fftSize = 4096;
+                    analyser.fftSize = 2048;
                     analyser.smoothingTimeConstant = 0.80;
                     masterGainNode = audioCtx.createGain();
                     masterGainNode.gain.value = 1.0;
                     fftDbBuffer = new Float32Array(analyser.frequencyBinCount);
+                    buildFastGuitarLookupTable(audioCtx.sampleRate, analyser.fftSize);
                   } catch (e) {}
                 }
                 if (audioCtx && audioCtx.state === "suspended") {
@@ -1641,39 +1753,32 @@ jobs:
                 }
               }
 
-              // Vigilante Bluetooth Keep-Alive: asegura que el AudioContext jamas se duerma mientras suena una pista
+              // Vigilante Bluetooth: mantiene el AudioContext despierto con 0% de carga de CPU
               setInterval(() => {
                 if (isPlaying && audioCtx && audioCtx.state === "suspended") {
                   audioCtx.resume();
                 }
               }, 2000);
 
+              // Analizador DSP Inteligente: SOLO corre cuando el reproductor grande esta abierto y visible
               setInterval(() => {
-                if (!isPlaying || !analyser || !audioCtx || !fftDbBuffer) return;
+                if (!isPlaying || !isPlayerModalOpen || document.hidden || !analyser || !audioCtx || !fftDbBuffer || !binPitchLut) return;
 
                 analyser.getFloatFrequencyData(fftDbBuffer);
-                const binW = audioCtx.sampleRate / analyser.fftSize;
                 const instRoot = new Float32Array(12);
                 const instChroma = new Float32Array(12);
-
                 let lowRhythmEnergy = 0;
-                const minBin = Math.max(2, Math.floor(60 / binW));
-                const maxBin = Math.min(fftDbBuffer.length - 4, Math.ceil(780 / binW));
 
-                for (let b = minBin; b < maxBin; b++) {
+                for (let b = minGuitarBin; b <= maxGuitarBin; b++) {
                   const db = fftDbBuffer[b];
-                  if (db > -75) {
-                    const mag = Math.pow(10, db / 20);
-                    const freq = b * binW;
-                    if (freq >= 65 && freq <= 175) {
-                      lowRhythmEnergy += mag;
-                    }
+                  if (db > -74) {
+                    const mag = Math.pow(10, db * 0.05);
+                    if (b < minGuitarBin + 8) lowRhythmEnergy += mag;
                     if (db >= fftDbBuffer[b - 1] && db >= fftDbBuffer[b + 1]) {
-                      const p = ((Math.round(12 * Math.log2(freq / 440) + 69) % 12) + 12) % 12;
+                      const p = binPitchLut[b];
                       instChroma[p] += mag;
-                      if (freq >= 78 && freq <= 400) {
-                        instRoot[p] += mag * (freq < 220 ? 1.75 : 1.25);
-                      }
+                      const rw = binRootWeightLut[b];
+                      if (rw > 0) instRoot[p] += mag * rw;
                     }
                   }
                 }
@@ -1687,7 +1792,7 @@ jobs:
                     while (candidateBpm < 75) candidateBpm *= 2;
                     while (candidateBpm > 165) candidateBpm /= 2;
                     onsetIntervals.push(candidateBpm);
-                    if (onsetIntervals.length > 12) onsetIntervals.shift();
+                    if (onsetIntervals.length > 10) onsetIntervals.shift();
                     if (onsetIntervals.length >= 4) {
                       const sorted = [...onsetIntervals].sort((a, b) => a - b);
                       const median = sorted[Math.floor(sorted.length / 2)];
@@ -1730,7 +1835,7 @@ jobs:
                   } else if (bestIdx !== lockedPitch) {
                     if (smoothedRoot[bestIdx] > smoothedRoot[lockedPitch] * (elapsed < HOLD_MS ? 1.35 : 1.14)) {
                       if (challenger === bestIdx) challengerCount++; else { challenger = bestIdx; challengerCount = 1; }
-                      if (challengerCount >= 5) lockChord(bestIdx, now);
+                      if (challengerCount >= 4) lockChord(bestIdx, now);
                     } else {
                       challengerCount = Math.max(0, challengerCount - 1);
                     }
@@ -1738,24 +1843,23 @@ jobs:
                     challengerCount = 0;
                   }
                 }
-              }, 50);
+              }, 65);
 
+              // Reloj del Metronomo: solo actualiza LEDs si el reproductor grande esta abierto o el clic sonoro activo
               setInterval(() => {
-                if (!isPlaying) return;
+                if (!isPlaying || (!isPlayerModalOpen && !metronomeSoundEnabled)) return;
                 const now = performance.now();
                 const beatIntervalMs = 60000 / Math.max(40, Math.min(220, detectedBpm));
                 if (now >= nextBeatTime) {
                   nextBeatTime = now + beatIntervalMs;
                   currentBeatIndex = (currentBeatIndex + 1) % 4;
-                  for (let i = 0; i < 4; i++) {
-                    const led = document.getElementById(`beat-${i}`);
-                    if (led) {
-                      if (i === currentBeatIndex) {
-                        led.className = i === 0
-                          ? "w-2.5 h-2.5 rounded-full bg-white border border-fuchsia-300 shadow-[0_0_10px_#fff] scale-125 transition-transform"
-                          : "w-2.5 h-2.5 rounded-full bg-fuchsia-400 border border-fuchsia-200 shadow-[0_0_8px_#e879f9] scale-110 transition-transform";
-                      } else {
-                        led.className = "w-2.5 h-2.5 rounded-full bg-purple-950 border border-purple-600/40 transition-transform";
+                  if (isPlayerModalOpen && !document.hidden) {
+                    for (let i = 0; i < 4; i++) {
+                      const led = document.getElementById(`beat-${i}`);
+                      if (led) {
+                        led.className = i === currentBeatIndex
+                          ? (i === 0 ? "w-2.5 h-2.5 rounded-full bg-white border border-fuchsia-300 shadow-[0_0_8px_#fff] scale-125" : "w-2.5 h-2.5 rounded-full bg-fuchsia-400 border border-fuchsia-200 scale-110")
+                          : "w-2.5 h-2.5 rounded-full bg-purple-950 border border-purple-600/40";
                       }
                     }
                   }
@@ -1763,7 +1867,7 @@ jobs:
                     playMetronomeClick(currentBeatIndex === 0);
                   }
                 }
-              }, 20);
+              }, 30);
 
               function playMetronomeClick(isAccent) {
                 try {
@@ -1786,7 +1890,7 @@ jobs:
                 const btn = document.getElementById("metroSoundBtn");
                 const icon = document.getElementById("metroIcon");
                 if (metronomeSoundEnabled) {
-                  btn.className = "px-3 h-7 rounded-full bg-fuchsia-600 border border-fuchsia-300 text-[10px] text-white font-bold flex items-center gap-1 shadow-[0_0_10px_rgba(217,70,239,0.5)]";
+                  btn.className = "px-3 h-7 rounded-full bg-fuchsia-600 border border-fuchsia-300 text-[10px] text-white font-bold flex items-center gap-1";
                   icon.className = "fa-solid fa-volume-high";
                 } else {
                   btn.className = "px-3 h-7 rounded-full glass-pill text-[10px] text-purple-200 font-semibold flex items-center gap-1";
@@ -1877,13 +1981,30 @@ jobs:
                 imgEl.src = srcUrl || "ic_launcher.png";
               }
 
+              // Cambio de pista ultra rapido O(1) sin reconstruir toda la lista del DOM
+              function highlightActiveRow(prevIdx, newIdx) {
+                if (prevIdx >= 0) {
+                  const oldRow = document.getElementById(`song-row-${prevIdx}`);
+                  const oldTitle = document.getElementById(`song-title-${prevIdx}`);
+                  if (oldRow) oldRow.classList.remove("song-row-active");
+                  if (oldTitle) { oldTitle.classList.remove("text-fuchsia-300"); oldTitle.classList.add("text-white"); }
+                }
+                if (newIdx >= 0) {
+                  const newRow = document.getElementById(`song-row-${newIdx}`);
+                  const newTitle = document.getElementById(`song-title-${newIdx}`);
+                  if (newRow) newRow.classList.add("song-row-active");
+                  if (newTitle) { newTitle.classList.remove("text-white"); newTitle.classList.add("text-fuchsia-300"); }
+                }
+              }
+
               function loadTrack(idx, autoPlay=false) {
                 if(idx < 0 || idx >= tracks.length) return;
-                currentTrackIndex = idx; const t = tracks[idx];
+                const prevIdx = currentTrackIndex;
+                currentTrackIndex = idx;
+                const t = tracks[idx];
                 lockedPitch = -1; prevChordName = "--"; onsetIntervals = [];
-                setImageWithFallback(document.getElementById("miniCover"), t.cover);
+                setImageWithFallback(document.getElementById("miniCover"), t.thumb);
                 setImageWithFallback(document.getElementById("fullCover"), t.cover);
-                setImageWithFallback(document.getElementById("ambientCoverBlur"), t.cover);
                 document.getElementById("miniTitle").textContent = t.title;
                 document.getElementById("miniArtist").textContent = t.artist;
                 document.getElementById("fullTitle").textContent = t.title;
@@ -1892,7 +2013,7 @@ jobs:
                 audioEl.src = t.audioUrl;
                 audioEl.load();
                 updateLikeButtonsUI();
-                renderLibrary();
+                highlightActiveRow(prevIdx, idx);
                 notifyNativeAndroidService();
                 if(autoPlay) playAudio();
               }
@@ -1951,7 +2072,14 @@ jobs:
               }
 
               audioEl.addEventListener("play", () => initAudioEngine());
-              audioEl.addEventListener("timeupdate", () => updateTimeUI(audioEl.currentTime, audioEl.duration || 0));
+              let lastTimeUpdateMs = 0;
+              audioEl.addEventListener("timeupdate", () => {
+                const now = performance.now();
+                if (now - lastTimeUpdateMs > 250) {
+                  lastTimeUpdateMs = now;
+                  updateTimeUI(audioEl.currentTime, audioEl.duration || 0);
+                }
+              });
               audioEl.addEventListener("loadedmetadata", () => notifyNativeAndroidService());
               audioEl.addEventListener("ended", nextTrack);
 
@@ -1970,11 +2098,13 @@ jobs:
               function updateTimeUI(cur, tot) {
                 const fmt = s => `${Math.floor(s/60)}:${Math.floor(s%60)<10?'0':''}${Math.floor(s%60)}`;
                 document.getElementById("miniSeek").value = tot ? (cur/tot)*100 : 0;
-                document.getElementById("fullSeek").value = tot ? (cur/tot)*100 : 0;
+                if (isPlayerModalOpen) {
+                  document.getElementById("fullSeek").value = tot ? (cur/tot)*100 : 0;
+                  document.getElementById("fullCurrentTime").textContent = fmt(cur);
+                  document.getElementById("fullDuration").textContent = fmt(tot);
+                }
                 document.getElementById("miniCurrentTime").textContent = fmt(cur);
-                document.getElementById("fullCurrentTime").textContent = fmt(cur);
                 document.getElementById("miniDuration").textContent = fmt(tot);
-                document.getElementById("fullDuration").textContent = fmt(tot);
               }
 
               function setSleepTimer(mins) {
@@ -1996,18 +2126,19 @@ jobs:
                   const btn = document.getElementById(`tab-${t}`);
                   if (!btn) return;
                   btn.className = t === tab
-                    ? "px-4 py-1.5 rounded-full text-xs font-bold bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white shadow-[0_4px_14px_rgba(192,38,211,0.4)] whitespace-nowrap transition flex items-center gap-1"
-                    : "px-4 py-1.5 rounded-full text-xs font-semibold glass-pill text-purple-200/85 whitespace-nowrap transition flex items-center gap-1";
+                    ? "px-4 py-1.5 rounded-full text-xs font-bold bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white shadow-md whitespace-nowrap flex items-center gap-1"
+                    : "px-4 py-1.5 rounded-full text-xs font-semibold glass-pill text-purple-200/85 whitespace-nowrap flex items-center gap-1";
                 });
                 renderLibrary();
               }
 
-              // Helper para crear una fila de cancion con soporte de Long-Press (Mantener presionado)
+              // Fila ligera a 120 FPS con miniaturas comprimidas y carga diferida
               function createSongRowElement(track, idx, extraRightHtml = "") {
                 const isCur = idx === currentTrackIndex;
                 const liked = isTrackLiked(track.id);
                 const div = document.createElement("div");
-                div.className = `p-2.5 rounded-2xl flex items-center justify-between gap-3 cursor-pointer transition active:scale-[0.99] ${isCur ? "glass-2027 border-fuchsia-400/70 shadow-[0_0_20px_rgba(217,70,239,0.28)]" : "glass-2027 hover:bg-purple-900/20"}`;
+                div.id = `song-row-${idx}`;
+                div.className = `p-2.5 rounded-2xl flex items-center justify-between gap-3 cursor-pointer song-row-fast ${isCur ? "song-row-active" : ""}`;
 
                 let pressTimer = null;
                 let longPressTriggered = false;
@@ -2028,9 +2159,9 @@ jobs:
                 mainArea.className = "flex items-center gap-3 min-w-0 flex-1";
                 mainArea.onclick = () => { if (!longPressTriggered) loadTrack(idx, true); };
                 mainArea.innerHTML = `
-                  <img src="${track.cover}" onerror="this.onerror=null;this.src='ic_launcher.png';" class="w-12 h-12 cover-row object-cover shrink-0 shadow" />
+                  <img src="${track.thumb}" loading="lazy" decoding="async" onerror="this.onerror=null;this.src='ic_launcher.png';" class="w-12 h-12 cover-row object-cover shrink-0 bg-purple-950" />
                   <div class="min-w-0 flex-1">
-                    <h4 class="text-sm font-bold ${isCur ? "text-fuchsia-300" : "text-white"} truncate">${track.title}</h4>
+                    <h4 id="song-title-${idx}" class="text-sm font-bold ${isCur ? "text-fuchsia-300" : "text-white"} truncate">${track.title}</h4>
                     <p class="text-xs text-purple-300/70 truncate">${track.artist} • ${track.album}</p>
                   </div>
                 `;
@@ -2039,7 +2170,7 @@ jobs:
                 actionsArea.className = "flex items-center gap-1 shrink-0";
                 actionsArea.innerHTML = `
                   ${extraRightHtml}
-                  <button onclick="toggleLikeByIdx(${idx}, event)" class="w-8 h-8 rounded-full flex items-center justify-center ${liked ? 'text-pink-500' : 'text-purple-300/50'}">
+                  <button id="row-like-btn-${idx}" onclick="toggleLikeByIdx(${idx}, event)" class="w-8 h-8 rounded-full flex items-center justify-center ${liked ? 'text-pink-500' : 'text-purple-300/50'}">
                     <i class="${liked ? 'fa-solid' : 'fa-regular'} fa-heart text-xs"></i>
                   </button>
                   <button onclick="event.stopPropagation(); openActionSheet(${idx});" class="w-8 h-8 rounded-full flex items-center justify-center text-purple-300/75">
@@ -2059,10 +2190,11 @@ jobs:
                 container.innerHTML = "";
 
                 if(tracks.length === 0) {
-                  container.innerHTML = `<div class="glass-2027 rounded-3xl p-8 text-center my-6"><h3 class="text-sm font-bold text-white mb-1">Escaneando tu Música...</h3><button onclick="rescanPhoneLibrary()" class="mt-3 px-6 py-2.5 rounded-full bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white text-xs font-bold shadow-lg">Escanear Memoria</button></div>`;
+                  container.innerHTML = `<div class="card-2027 rounded-3xl p-8 text-center my-6"><h3 class="text-sm font-bold text-white mb-1">Escaneando tu Música...</h3><button onclick="rescanPhoneLibrary()" class="mt-3 px-6 py-2.5 rounded-full bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white text-xs font-bold shadow-lg">Escanear Memoria</button></div>`;
                   return;
                 }
 
+                const frag = document.createDocumentFragment();
                 let filtered = tracks.filter(t => t.title.toLowerCase().includes(query) || t.artist.toLowerCase().includes(query) || t.album.toLowerCase().includes(query));
 
                 if(filterField && filterValue) {
@@ -2071,23 +2203,23 @@ jobs:
                   back.className = "mb-2 px-3.5 py-1.5 rounded-full glass-pill text-xs text-fuchsia-300 font-bold flex items-center gap-1.5";
                   back.innerHTML = `<i class="fa-solid fa-arrow-left"></i> Volver a ${currentTab === 'artists' ? 'Artistas' : 'Álbumes'}`;
                   back.onclick = () => renderLibrary();
-                  container.appendChild(back);
+                  frag.appendChild(back);
                 }
 
                 if(currentTab === "songs" || filterField) {
                   filtered.forEach(track => {
                     const idx = tracks.indexOf(track);
-                    container.appendChild(createSongRowElement(track, idx));
+                    frag.appendChild(createSongRowElement(track, idx));
                   });
                 } else if(currentTab === "favorites") {
                   const favTracks = filtered.filter(t => isTrackLiked(t.id));
                   if (favTracks.length === 0) {
-                    container.innerHTML = `<div class="glass-2027 rounded-3xl p-8 text-center text-xs text-purple-300/80"><i class="fa-regular fa-heart text-2xl text-pink-400 mb-2 block"></i>Aún no tienes canciones en Tus Me Gusta.<br>Toca el corazón ❤️ en cualquier canción para guardarla aquí.</div>`;
+                    container.innerHTML = `<div class="card-2027 rounded-3xl p-8 text-center text-xs text-purple-300/80"><i class="fa-regular fa-heart text-2xl text-pink-400 mb-2 block"></i>Aún no tienes canciones en Tus Me Gusta.<br>Toca el corazón ❤️ en cualquier canción para guardarla aquí.</div>`;
                     return;
                   }
                   favTracks.forEach(track => {
                     const idx = tracks.indexOf(track);
-                    container.appendChild(createSongRowElement(track, idx));
+                    frag.appendChild(createSongRowElement(track, idx));
                   });
                 } else if(currentTab === "playlists") {
                   if (activePlaylistViewId) {
@@ -2101,39 +2233,40 @@ jobs:
                       </button>
                       <h3 class="text-sm font-extrabold text-white truncate">${pl.name}</h3>
                     `;
-                    container.appendChild(topBar);
+                    frag.appendChild(topBar);
 
                     const plTracks = pl.tracks.map(id => tracks.find(t => t.id === id)).filter(Boolean);
                     if (plTracks.length === 0) {
                       const empty = document.createElement("div");
-                      empty.className = "glass-2027 rounded-3xl p-6 text-center text-xs text-purple-300/80";
+                      empty.className = "card-2027 rounded-3xl p-6 text-center text-xs text-purple-300/80";
                       empty.innerHTML = "Esta playlist está vacía.<br>Mantén presionada cualquier canción en tu biblioteca para añadirla aquí.";
-                      container.appendChild(empty);
+                      frag.appendChild(empty);
                     } else {
                       plTracks.forEach(track => {
                         const idx = tracks.indexOf(track);
                         const removeBtn = `<button onclick="removeTrackFromPlaylist('${pl.id}', '${track.id}', event)" class="w-8 h-8 rounded-full flex items-center justify-center text-red-400/80" title="Quitar"><i class="fa-solid fa-xmark text-xs"></i></button>`;
-                        container.appendChild(createSongRowElement(track, idx, removeBtn));
+                        frag.appendChild(createSongRowElement(track, idx, removeBtn));
                       });
                     }
+                    container.appendChild(frag);
                     return;
                   }
 
                   const headerBtn = document.createElement("button");
-                  headerBtn.className = "w-full p-3.5 mb-2 rounded-2xl bg-gradient-to-r from-purple-700/80 to-fuchsia-600/80 border border-fuchsia-400/40 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-md active:scale-98 transition";
+                  headerBtn.className = "w-full p-3.5 mb-2 rounded-2xl bg-gradient-to-r from-purple-700 to-fuchsia-600 border border-fuchsia-400/40 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-md active:scale-98";
                   headerBtn.innerHTML = `<i class="fa-solid fa-plus"></i> Crear Nueva Playlist Personalizada`;
                   headerBtn.onclick = () => openCreatePlaylistModal(false);
-                  container.appendChild(headerBtn);
+                  frag.appendChild(headerBtn);
 
                   userPlaylists.forEach(pl => {
                     const firstTrack = pl.tracks.map(id => tracks.find(t => t.id === id)).find(Boolean);
-                    const coverSrc = firstTrack ? firstTrack.cover : "ic_launcher.png";
+                    const coverSrc = firstTrack ? firstTrack.thumb : "ic_launcher.png";
                     const card = document.createElement("div");
-                    card.className = "glass-2027 p-3 rounded-2xl flex items-center justify-between cursor-pointer active:scale-98 transition";
+                    card.className = "card-2027 p-3 rounded-2xl flex items-center justify-between cursor-pointer active:scale-98";
                     card.onclick = () => { activePlaylistViewId = pl.id; renderLibrary(); };
                     card.innerHTML = `
                       <div class="flex items-center gap-3.5 min-w-0">
-                        <img src="${coverSrc}" onerror="this.onerror=null;this.src='ic_launcher.png';" class="w-13 h-13 w-[52px] h-[52px] cover-row object-cover shrink-0" />
+                        <img src="${coverSrc}" loading="lazy" decoding="async" onerror="this.onerror=null;this.src='ic_launcher.png';" class="w-[52px] h-[52px] cover-row object-cover shrink-0" />
                         <div class="min-w-0">
                           <h4 class="text-sm font-bold text-white truncate">${pl.name}</h4>
                           <p class="text-xs text-fuchsia-300/75">${pl.tracks.length} canciones</p>
@@ -2146,29 +2279,31 @@ jobs:
                         <i class="fa-solid fa-chevron-right text-purple-400 text-xs pr-1"></i>
                       </div>
                     `;
-                    container.appendChild(card);
+                    frag.appendChild(card);
                   });
                 } else if(currentTab === "artists") {
                   [...new Set(filtered.map(t => t.artist))].forEach(artist => {
                     const artistTracks = tracks.filter(t => t.artist === artist);
                     const div = document.createElement("div");
-                    div.className = "glass-2027 p-3 rounded-2xl flex items-center justify-between cursor-pointer active:scale-98 transition";
+                    div.className = "card-2027 p-3 rounded-2xl flex items-center justify-between cursor-pointer active:scale-98";
                     div.onclick = () => renderLibrary("artist", artist);
-                    div.innerHTML = `<div class="flex items-center gap-3.5"><img src="${artistTracks[0]?.cover}" onerror="this.onerror=null;this.src='ic_launcher.png';" class="w-12 h-12 rounded-full object-cover border border-fuchsia-400/40" /><div><h4 class="text-sm font-bold text-white">${artist}</h4><p class="text-xs text-purple-300/70">${artistTracks.length} pistas</p></div></div><i class="fa-solid fa-chevron-right text-purple-400 text-xs pr-2"></i>`;
-                    container.appendChild(div);
+                    div.innerHTML = `<div class="flex items-center gap-3.5"><img src="${artistTracks[0]?.thumb}" loading="lazy" decoding="async" onerror="this.onerror=null;this.src='ic_launcher.png';" class="w-12 h-12 rounded-full object-cover border border-fuchsia-400/40" /><div><h4 class="text-sm font-bold text-white">${artist}</h4><p class="text-xs text-purple-300/70">${artistTracks.length} pistas</p></div></div><i class="fa-solid fa-chevron-right text-purple-400 text-xs pr-2"></i>`;
+                    frag.appendChild(div);
                   });
                 } else if(currentTab === "albums") {
                   const grid = document.createElement("div"); grid.className = "grid grid-cols-2 gap-3";
                   [...new Set(filtered.map(t => t.album))].forEach(album => {
                     const sample = tracks.find(t => t.album === album);
                     const card = document.createElement("div");
-                    card.className = "glass-2027 p-3 rounded-3xl cursor-pointer active:scale-98 transition";
+                    card.className = "card-2027 p-3 rounded-3xl cursor-pointer active:scale-98";
                     card.onclick = () => renderLibrary("album", album);
-                    card.innerHTML = `<img src="${sample.cover}" onerror="this.onerror=null;this.src='ic_launcher.png';" class="w-full aspect-square cover-2027 object-cover mb-2.5" /><h4 class="text-xs font-bold text-white truncate px-1">${album}</h4><p class="text-[11px] text-purple-300/75 truncate px-1">${sample.artist}</p>`;
+                    card.innerHTML = `<img src="${sample.thumb}" loading="lazy" decoding="async" onerror="this.onerror=null;this.src='ic_launcher.png';" class="w-full aspect-square cover-2027 object-cover mb-2.5" /><h4 class="text-xs font-bold text-white truncate px-1">${album}</h4><p class="text-[11px] text-purple-300/75 truncate px-1">${sample.artist}</p>`;
                     grid.appendChild(card);
                   });
-                  container.appendChild(grid);
+                  frag.appendChild(grid);
                 }
+
+                container.appendChild(frag);
               }
 
               function openEditModal() {
@@ -2189,18 +2324,31 @@ jobs:
                   customOverrides[t.id] = { title: t.title, artist: t.artist, album: t.album, cover: t.cover };
                   localStorage.setItem("cosmos_overrides_2027", JSON.stringify(customOverrides));
                   loadTrack(currentTrackIndex, isPlaying);
+                  renderLibrary();
                   showToast("✨ Información actualizada");
                 };
                 if(coverFile) {
                   const reader = new FileReader();
-                  reader.onload = e => { t.cover = e.target.result; save(); };
+                  reader.onload = e => { t.cover = e.target.result; t.thumb = e.target.result; save(); };
                   reader.readAsDataURL(coverFile);
                 } else save();
                 closeModal("editModal");
               }
 
-              function openModal(id) { document.getElementById(id).classList.remove("hidden"); document.getElementById(id).classList.add("flex"); }
-              function closeModal(id) { document.getElementById(id).classList.add("hidden"); document.getElementById(id).classList.remove("flex"); }
+              function openModal(id) {
+                if (id === "playerModal") {
+                  isPlayerModalOpen = true;
+                  updateTimeUI(audioEl.currentTime, audioEl.duration || 0);
+                }
+                document.getElementById(id).classList.remove("hidden");
+                document.getElementById(id).classList.add("flex");
+              }
+
+              function closeModal(id) {
+                if (id === "playerModal") isPlayerModalOpen = false;
+                document.getElementById(id).classList.add("hidden");
+                document.getElementById(id).classList.remove("flex");
+              }
 
               window.addEventListener("DOMContentLoaded", () => {
                 const c = document.getElementById("chromaBars");
@@ -2218,13 +2366,13 @@ jobs:
 
                 const splash = document.getElementById("welcomeSplash");
                 const bar = document.getElementById("splashBar");
-                setTimeout(() => { if(bar) bar.style.width = "100%"; }, 100);
+                setTimeout(() => { if(bar) bar.style.width = "100%"; }, 80);
                 setTimeout(() => {
                   if(splash) {
                     splash.style.opacity = "0";
-                    setTimeout(() => splash.remove(), 700);
+                    setTimeout(() => splash.remove(), 500);
                   }
-                }, 2100);
+                }, 1600);
               });
             </script>
           </body>
