@@ -33,7 +33,7 @@ jobs:
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
           echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
 
-      - name: Compilar COSMOS 5.0 Motor 100% Nativo
+      - name: Compilar COSMOS Definitivo Zero-Lag
         run: |
           mkdir -p app/src/main/java/com/belmont/cosmos app/src/main/assets app/src/main/res/values app/src/main/res/drawable app/src/main/res/mipmap-xxhdpi
 
@@ -132,8 +132,8 @@ jobs:
               applicationId "com.belmont.cosmos"
               minSdk 26
               targetSdk 34
-              versionCode 5
-              versionName "5.0-NATIVE"
+              versionCode 6
+              versionName "6.0-FINAL"
             }
             compileOptions {
               sourceCompatibility JavaVersion.VERSION_17
@@ -208,11 +208,10 @@ jobs:
               super.onCreate()
               try { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO) } catch (_: Exception) {}
               val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-              wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Cosmos::NativeAudioLock").apply { setReferenceCounted(false) }
+              wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Cosmos::FinalAudioLock").apply { setReferenceCounted(false) }
             }
             override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-              val isPlaying = intent?.getBooleanExtra("IS_PLAYING", true) ?: true
-              if (isPlaying && wakeLock?.isHeld == false) wakeLock?.acquire(12 * 60 * 60 * 1000L)
+              if (wakeLock?.isHeld == false) wakeLock?.acquire(12 * 60 * 60 * 1000L)
               val notif: Notification? = MainActivity.latestNotification
               if (notif != null) {
                 try {
@@ -270,48 +269,74 @@ jobs:
 
           class MainActivity : ComponentActivity() {
             companion object { var latestNotification: Notification? = null }
+
             private lateinit var webView: WebView
             private var mediaSession: MediaSession? = null
             private lateinit var audioManager: AudioManager
             private var focusRequest: AudioFocusRequest? = null
-            private val CHANNEL_ID = "cosmos_native_channel"
+            private val CHANNEL_ID = "cosmos_final_channel"
             private var fallbackCosmosArt: Bitmap? = null
             private var fallbackThumbBytes: ByteArray? = null
+
+            // Hilo exclusivo de alta prioridad para que MediaPlayer jamas bloquee la UI
+            private lateinit var audioThread: HandlerThread
+            private lateinit var audioHandler: Handler
+            private val uiHandler = Handler(Looper.getMainLooper())
 
             private var mediaPlayer: MediaPlayer? = null
             private var hardwareEq: Equalizer? = null
             private var currentEqSessionId: Int = -1
             private var currentEqGainsDb = intArrayOf(5, 2, 0, 4, 6)
-            private var isPlayerPrepared = false
+
+            @Volatile private var isPlayerPrepared = false
+            @Volatile private var isPlayingState = false
+            @Volatile private var currentPosMs = 0
+            @Volatile private var currentDurMs = 0
+            @Volatile private var currentIndex: Int = -1
+            @Volatile private var shuffleMode: Boolean = false
+            @Volatile private var repeatMode: Int = 0
+            @Volatile private var isUiVisible = true
+            private var isForegroundServiceRunning = false
 
             private val trackList = mutableListOf<NativeTrack>()
             private var activeQueueIndices = mutableListOf<Int>()
-            private var currentIndex: Int = -1
-            private var shuffleMode: Boolean = false
-            private var repeatMode: Int = 0
             private var currentArtBitmap: Bitmap? = null
-
-            private val uiHandler = Handler(Looper.getMainLooper())
-            private var isUiVisible = true
 
             private val progressRunnable = object : Runnable {
               override fun run() {
-                if (isUiVisible && isPlayerPrepared && mediaPlayer?.isPlaying == true) syncProgressToWeb()
-                uiHandler.postDelayed(this, 400L)
+                if (isUiVisible && isPlayerPrepared) {
+                  audioHandler.post {
+                    try {
+                      val mp = mediaPlayer
+                      if (mp != null && isPlayerPrepared) {
+                        currentPosMs = mp.currentPosition
+                        currentDurMs = mp.duration
+                        isPlayingState = mp.isPlaying
+                        val pos = currentPosMs
+                        val dur = currentDurMs
+                        val play = isPlayingState
+                        uiHandler.post {
+                          webView.evaluateJavascript("window.onNativeProgress($pos, $dur, $play);", null)
+                        }
+                      }
+                    } catch (_: Exception) {}
+                  }
+                }
+                uiHandler.postDelayed(this, 350L)
               }
             }
 
-            private val thumbCache = object : LruCache<Long, ByteArray>(12 * 1024 * 1024) {
+            private val thumbCache = object : LruCache<Long, ByteArray>(10 * 1024 * 1024) {
               override fun sizeOf(key: Long, value: ByteArray): Int = value.size
             }
 
             private val mediaActionReceiver = object : BroadcastReceiver() {
               override fun onReceive(context: Context?, intent: Intent?) {
                 when (intent?.action) {
-                  "COSMOS_PREV" -> prevTrackNative()
-                  "COSMOS_TOGGLE" -> togglePlayNative()
-                  "COSMOS_NEXT" -> nextTrackNative()
-                  AudioManager.ACTION_AUDIO_BECOMING_NOISY -> pauseNative()
+                  "COSMOS_PREV" -> dispatchPrev()
+                  "COSMOS_TOGGLE" -> dispatchTogglePlay()
+                  "COSMOS_NEXT" -> dispatchNext()
+                  AudioManager.ACTION_AUDIO_BECOMING_NOISY -> dispatchPause()
                 }
               }
             }
@@ -320,10 +345,15 @@ jobs:
               super.onCreate(savedInstanceState)
               window.statusBarColor = Color.parseColor("#040109")
               window.navigationBarColor = Color.parseColor("#040109")
+
+              audioThread = HandlerThread("CosmosAudioEngine", Process.THREAD_PRIORITY_URGENT_AUDIO).apply { start() }
+              audioHandler = Handler(audioThread.looper)
+
               audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+              setupSingleAudioFocusRequest()
               fallbackCosmosArt = createCosmosPurpleArtwork()
               currentArtBitmap = fallbackCosmosArt
-              fallbackThumbBytes = bitmapToJpegBytes(Bitmap.createScaledBitmap(fallbackCosmosArt!!, 140, 140, true), 82)
+              fallbackThumbBytes = bitmapToJpegBytes(Bitmap.createScaledBitmap(fallbackCosmosArt!!, 128, 128, true), 80)
 
               setupMediaSessionAndChannel()
               requestBatteryOptimizationExemption()
@@ -353,154 +383,248 @@ jobs:
               }
               webView.addJavascriptInterface(CosmosBridge(), "CosmosNative")
               webView.loadUrl("file:///android_asset/index.html")
-              uiHandler.postDelayed(progressRunnable, 500L)
+              uiHandler.postDelayed(progressRunnable, 400L)
             }
 
-            private fun loadTrackNative(index: Int, autoPlay: Boolean) {
-              if (index < 0 || index >= trackList.size) return
-              currentIndex = index
-              val track = trackList[index]
-              try {
-                isPlayerPrepared = false
-                if (mediaPlayer == null) {
-                  mediaPlayer = MediaPlayer().apply {
-                    setWakeMode(applicationContext, PowerManager.PARTIAL_WAKE_LOCK)
-                    setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
-                    setOnCompletionListener { onNativeTrackCompleted() }
-                    setOnErrorListener { _, _, _ -> isPlayerPrepared = false; true }
+            // Unica instancia de AudioFocus para que jamas haya conflicto de listeners
+            private fun setupSingleAudioFocusRequest() {
+              val attrs = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                .build()
+              focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(attrs)
+                .setAcceptsDelayedFocusGain(true)
+                .setWillPauseWhenDucked(false)
+                .setOnAudioFocusChangeListener({ change ->
+                  audioHandler.post {
+                    try {
+                      when (change) {
+                        AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> mediaPlayer?.setVolume(0.35f, 0.35f)
+                        AudioManager.AUDIOFOCUS_GAIN -> mediaPlayer?.setVolume(1.0f, 1.0f)
+                        AudioManager.AUDIOFOCUS_LOSS -> {
+                          if (mediaPlayer?.isPlaying == true) {
+                            mediaPlayer?.pause()
+                            isPlayingState = false
+                            syncStateToUiAndNotif(updateNotifCard = true)
+                          }
+                        }
+                      }
+                    } catch (_: Exception) {}
                   }
-                } else {
-                  mediaPlayer?.reset()
-                  mediaPlayer?.setWakeMode(applicationContext, PowerManager.PARTIAL_WAKE_LOCK)
-                  mediaPlayer?.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
-                }
-                val contentUri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, track.mediaId)
-                mediaPlayer?.setDataSource(applicationContext, contentUri)
-                mediaPlayer?.prepare()
-                isPlayerPrepared = true
-                setupHardwareEqualizer(mediaPlayer!!.audioSessionId)
-                if (autoPlay) {
-                  requestCosmosAudioFocus()
-                  mediaPlayer?.start()
-                }
-                syncFullTrackToWeb()
-                Thread {
-                  currentArtBitmap = loadAlbumArtBitmap(track.albumId)
-                  runOnUiThread { updateNotificationAndSession() }
-                }.start()
-              } catch (e: Exception) { e.printStackTrace() }
+                }, uiHandler)
+                .build()
             }
 
-            private fun playNative() {
-              if (!isPlayerPrepared) {
-                if (trackList.isNotEmpty()) loadTrackNative(if (currentIndex >= 0) currentIndex else 0, true)
+            private fun dispatchLoadTrack(index: Int, autoPlay: Boolean) {
+              audioHandler.removeCallbacksAndMessages("LOAD_TOKEN")
+              audioHandler.postAtTime({
+                if (index < 0 || index >= trackList.size) return@postAtTime
+                currentIndex = index
+                val track = trackList[index]
+                try {
+                  isPlayerPrepared = false
+                  isPlayingState = false
+                  if (mediaPlayer == null) {
+                    mediaPlayer = MediaPlayer().apply {
+                      setWakeMode(applicationContext, PowerManager.PARTIAL_WAKE_LOCK)
+                      setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
+                      setOnCompletionListener { onTrackFinishedInternal() }
+                      setOnErrorListener { _, _, _ -> isPlayerPrepared = false; true }
+                    }
+                  } else {
+                    mediaPlayer?.reset()
+                    mediaPlayer?.setWakeMode(applicationContext, PowerManager.PARTIAL_WAKE_LOCK)
+                    mediaPlayer?.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
+                  }
+
+                  val contentUri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, track.mediaId)
+                  mediaPlayer?.setDataSource(applicationContext, contentUri)
+                  mediaPlayer?.prepare()
+                  isPlayerPrepared = true
+                  currentDurMs = mediaPlayer?.duration ?: track.durationMs.toInt()
+                  currentPosMs = 0
+
+                  setupHardwareEqualizerInternal(mediaPlayer!!.audioSessionId)
+
+                  if (autoPlay) {
+                    focusRequest?.let { audioManager.requestAudioFocus(it) }
+                    mediaPlayer?.start()
+                    isPlayingState = true
+                  }
+
+                  currentArtBitmap = loadCompactAlbumArt(track.albumId)
+                  updateSessionMetadataInternal(track, currentArtBitmap!!, currentDurMs.toLong())
+                  syncStateToUiAndNotif(updateNotifCard = true)
+                } catch (_: Exception) {
+                  isPlayerPrepared = false
+                }
+              }, "LOAD_TOKEN", SystemClock.uptimeMillis())
+            }
+
+            private fun dispatchPlay() {
+              audioHandler.post {
+                if (!isPlayerPrepared) {
+                  if (trackList.isNotEmpty()) dispatchLoadTrack(if (currentIndex >= 0) currentIndex else 0, true)
+                  return@post
+                }
+                try {
+                  focusRequest?.let { audioManager.requestAudioFocus(it) }
+                  mediaPlayer?.setVolume(1.0f, 1.0f)
+                  mediaPlayer?.start()
+                  isPlayingState = true
+                  currentPosMs = mediaPlayer?.currentPosition ?: 0
+                  syncStateToUiAndNotif(updateNotifCard = true)
+                } catch (_: Exception) {}
+              }
+            }
+
+            private fun dispatchPause() {
+              audioHandler.post {
+                if (!isPlayerPrepared) return@post
+                try {
+                  if (mediaPlayer?.isPlaying == true) mediaPlayer?.pause()
+                  isPlayingState = false
+                  currentPosMs = mediaPlayer?.currentPosition ?: 0
+                  syncStateToUiAndNotif(updateNotifCard = true)
+                } catch (_: Exception) {}
+              }
+            }
+
+            private fun dispatchTogglePlay() {
+              audioHandler.post {
+                if (!isPlayerPrepared) {
+                  if (trackList.isNotEmpty()) dispatchLoadTrack(if (currentIndex >= 0) currentIndex else 0, true)
+                  return@post
+                }
+                try {
+                  if (mediaPlayer?.isPlaying == true) {
+                    mediaPlayer?.pause()
+                    isPlayingState = false
+                  } else {
+                    focusRequest?.let { audioManager.requestAudioFocus(it) }
+                    mediaPlayer?.setVolume(1.0f, 1.0f)
+                    mediaPlayer?.start()
+                    isPlayingState = true
+                  }
+                  currentPosMs = mediaPlayer?.currentPosition ?: 0
+                  syncStateToUiAndNotif(updateNotifCard = true)
+                } catch (_: Exception) {}
+              }
+            }
+
+            // Seek instantaneo en hardware (funciona tanto en Play como en Pausa sin saturar Binder)
+            private fun dispatchSeekToMs(targetMs: Int) {
+              audioHandler.post {
+                if (!isPlayerPrepared) return@post
+                try {
+                  val mp = mediaPlayer ?: return@post
+                  val dur = mp.duration
+                  if (dur > 0) {
+                    val clamped = targetMs.coerceIn(0, dur)
+                    mp.seekTo(clamped)
+                    currentPosMs = clamped
+                    currentDurMs = dur
+                    isPlayingState = mp.isPlaying
+                    syncStateToUiAndNotif(updateNotifCard = false)
+                  }
+                } catch (_: Exception) {}
+              }
+            }
+
+            private fun dispatchSeekPercent(percent: Double) {
+              audioHandler.post {
+                if (!isPlayerPrepared) return@post
+                try {
+                  val mp = mediaPlayer ?: return@post
+                  val dur = mp.duration
+                  if (dur > 0) {
+                    val target = ((percent.coerceIn(0.0, 100.0) / 100.0) * dur).toInt()
+                    mp.seekTo(target)
+                    currentPosMs = target
+                    currentDurMs = dur
+                    isPlayingState = mp.isPlaying
+                    syncStateToUiAndNotif(updateNotifCard = false)
+                  }
+                } catch (_: Exception) {}
+              }
+            }
+
+            private fun dispatchSeekDelta(deltaMs: Int) {
+              audioHandler.post {
+                if (!isPlayerPrepared) return@post
+                try {
+                  val mp = mediaPlayer ?: return@post
+                  val dur = mp.duration
+                  if (dur > 0) {
+                    val target = (mp.currentPosition + deltaMs).coerceIn(0, dur)
+                    mp.seekTo(target)
+                    currentPosMs = target
+                    currentDurMs = dur
+                    isPlayingState = mp.isPlaying
+                    syncStateToUiAndNotif(updateNotifCard = false)
+                  }
+                } catch (_: Exception) {}
+              }
+            }
+
+            private fun dispatchPrev() {
+              audioHandler.post {
+                if (trackList.isEmpty()) return@post
+                if (isPlayerPrepared && (mediaPlayer?.currentPosition ?: 0) > 3500) {
+                  mediaPlayer?.seekTo(0)
+                  currentPosMs = 0
+                  syncStateToUiAndNotif(updateNotifCard = false)
+                  return@post
+                }
+                val queue = if (activeQueueIndices.isNotEmpty()) activeQueueIndices else trackList.indices.toList()
+                if (queue.isEmpty()) return@post
+                val pos = queue.indexOf(currentIndex)
+                val prevIdx = if (pos > 0) queue[pos - 1] else queue.last()
+                dispatchLoadTrack(prevIdx, true)
+              }
+            }
+
+            private fun dispatchNext() {
+              audioHandler.post {
+                if (trackList.isEmpty()) return@post
+                val queue = if (activeQueueIndices.isNotEmpty()) activeQueueIndices else trackList.indices.toList()
+                if (queue.isEmpty()) return@post
+                val nextIdx = if (shuffleMode) queue.random() else {
+                  val pos = queue.indexOf(currentIndex)
+                  if (pos >= 0 && pos + 1 < queue.size) queue[pos + 1] else queue.first()
+                }
+                dispatchLoadTrack(nextIdx, true)
+              }
+            }
+
+            private fun onTrackFinishedInternal() {
+              if (trackList.isEmpty()) return
+              if (repeatMode == 2) {
+                try {
+                  mediaPlayer?.seekTo(0)
+                  mediaPlayer?.start()
+                  isPlayingState = true
+                  currentPosMs = 0
+                  syncStateToUiAndNotif(updateNotifCard = false)
+                } catch (_: Exception) {}
                 return
               }
-              try {
-                requestCosmosAudioFocus()
-                if (mediaPlayer?.isPlaying == false) mediaPlayer?.start()
-                syncFullTrackToWeb()
-                updateNotificationAndSession()
-              } catch (_: Exception) {}
+              dispatchNext()
             }
 
-            private fun pauseNative() {
-              if (!isPlayerPrepared) return
-              try {
-                if (mediaPlayer?.isPlaying == true) mediaPlayer?.pause()
-                syncFullTrackToWeb()
-                updateNotificationAndSession()
-              } catch (_: Exception) {}
-            }
-
-            private fun togglePlayNative() {
-              if (!isPlayerPrepared) { playNative(); return }
-              if (mediaPlayer?.isPlaying == true) pauseNative() else playNative()
-            }
-
-            private fun seekToPercentNative(percent: Double) {
-              if (!isPlayerPrepared) return
-              try {
-                val mp = mediaPlayer ?: return
-                val dur = mp.duration
-                if (dur > 0) {
-                  val targetMs = ((percent.coerceIn(0.0, 100.0) / 100.0) * dur).toInt()
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) mp.seekTo(targetMs.toLong(), MediaPlayer.SEEK_CLOSEST_SYNC)
-                  else mp.seekTo(targetMs)
-                  syncProgressToWeb()
-                  updateNotificationAndSession()
-                }
-              } catch (_: Exception) {}
-            }
-
-            private fun seekToMsNative(targetMs: Long) {
-              if (!isPlayerPrepared) return
-              try {
-                val mp = mediaPlayer ?: return
-                val dur = mp.duration
-                if (dur > 0) {
-                  val clamped = targetMs.coerceIn(0L, dur.toLong())
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) mp.seekTo(clamped, MediaPlayer.SEEK_CLOSEST_SYNC)
-                  else mp.seekTo(clamped.toInt())
-                  syncProgressToWeb()
-                  updateNotificationAndSession()
-                }
-              } catch (_: Exception) {}
-            }
-
-            private fun seekByDeltaMsNative(deltaMs: Int) {
-              if (!isPlayerPrepared) return
-              try {
-                val mp = mediaPlayer ?: return
-                val dur = mp.duration
-                if (dur > 0) {
-                  val target = (mp.currentPosition + deltaMs).coerceIn(0, dur)
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) mp.seekTo(target.toLong(), MediaPlayer.SEEK_CLOSEST_SYNC)
-                  else mp.seekTo(target)
-                  syncProgressToWeb()
-                  updateNotificationAndSession()
-                }
-              } catch (_: Exception) {}
-            }
-
-            private fun prevTrackNative() {
-              if (trackList.isEmpty()) return
-              if (isPlayerPrepared && (mediaPlayer?.currentPosition ?: 0) > 3500) { seekToMsNative(0L); return }
-              val queue = if (activeQueueIndices.isNotEmpty()) activeQueueIndices else trackList.indices.toList()
-              if (queue.isEmpty()) return
-              val pos = queue.indexOf(currentIndex)
-              loadTrackNative(if (pos > 0) queue[pos - 1] else queue.last(), true)
-            }
-
-            private fun nextTrackNative() {
-              if (trackList.isEmpty()) return
-              val queue = if (activeQueueIndices.isNotEmpty()) activeQueueIndices else trackList.indices.toList()
-              if (queue.isEmpty()) return
-              val nextIdx = if (shuffleMode) queue.random() else {
-                val pos = queue.indexOf(currentIndex)
-                if (pos >= 0 && pos + 1 < queue.size) queue[pos + 1] else queue.first()
-              }
-              loadTrackNative(nextIdx, true)
-            }
-
-            private fun onNativeTrackCompleted() {
-              if (trackList.isEmpty()) return
-              if (repeatMode == 2) { seekToMsNative(0L); playNative(); return }
-              nextTrackNative()
-            }
-
-            private fun setupHardwareEqualizer(sessionId: Int) {
+            private fun setupHardwareEqualizerInternal(sessionId: Int) {
               try {
                 if (hardwareEq == null || currentEqSessionId != sessionId) {
                   hardwareEq?.release()
                   hardwareEq = Equalizer(0, sessionId).apply { enabled = true }
                   currentEqSessionId = sessionId
                 }
-                applyEqGainsToHardware()
+                applyEqGainsInternal()
               } catch (_: Exception) {}
             }
 
-            private fun applyEqGainsToHardware() {
+            private fun applyEqGainsInternal() {
               try {
                 val eq = hardwareEq ?: return
                 val numBands = eq.numberOfBands.toInt()
@@ -514,20 +638,111 @@ jobs:
               } catch (_: Exception) {}
             }
 
-            private fun syncFullTrackToWeb() {
-              if (currentIndex < 0 || currentIndex >= trackList.size) return
-              val playing = isPlayerPrepared && (mediaPlayer?.isPlaying == true)
-              val posMs = if (isPlayerPrepared) (mediaPlayer?.currentPosition ?: 0) else 0
-              val durMs = if (isPlayerPrepared) (mediaPlayer?.duration ?: trackList[currentIndex].durationMs.toInt()) else trackList[currentIndex].durationMs.toInt()
-              webView.evaluateJavascript("window.onNativeTrackState($currentIndex, $playing, $posMs, $durMs);", null)
+            private fun updateSessionMetadataInternal(track: NativeTrack, art: Bitmap, durMs: Long) {
+              val meta = MediaMetadata.Builder()
+                .putString(MediaMetadata.METADATA_KEY_TITLE, track.title)
+                .putString(MediaMetadata.METADATA_KEY_ARTIST, "${track.artist} • ${track.album}")
+                .putString(MediaMetadata.METADATA_KEY_ALBUM, "COSMOS • Belmont Edition")
+                .putLong(MediaMetadata.METADATA_KEY_DURATION, if (durMs > 0) durMs else -1L)
+                .putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, art)
+                .build()
+              mediaSession?.setMetadata(meta)
             }
 
-            private fun syncProgressToWeb() {
-              if (!isPlayerPrepared) return
-              val playing = mediaPlayer?.isPlaying == true
-              val posMs = mediaPlayer?.currentPosition ?: 0
-              val durMs = mediaPlayer?.duration ?: 0
-              webView.evaluateJavascript("window.onNativeProgress($posMs, $durMs, $playing);", null)
+            private fun syncStateToUiAndNotif(updateNotifCard: Boolean) {
+              val idx = currentIndex
+              val play = isPlayingState
+              val pos = currentPosMs
+              val dur = currentDurMs
+              val stateCode = if (play) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED
+              val actions = PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or PlaybackState.ACTION_SKIP_TO_NEXT or PlaybackState.ACTION_SKIP_TO_PREVIOUS or PlaybackState.ACTION_SEEK_TO
+
+              mediaSession?.setPlaybackState(
+                PlaybackState.Builder()
+                  .setActions(actions)
+                  .setState(stateCode, pos.toLong(), if (play) 1.0f else 0f)
+                  .build()
+              )
+
+              uiHandler.post {
+                if (idx >= 0 && idx < trackList.size) {
+                  webView.evaluateJavascript("window.onNativeTrackState($idx, $play, $pos, $dur);", null)
+                  if (updateNotifCard) {
+                    postMediaNotificationCard(trackList[idx], play)
+                  }
+                }
+              }
+            }
+
+            private fun postMediaNotificationCard(track: NativeTrack, isPlaying: Boolean) {
+              val artBitmap = currentArtBitmap ?: fallbackCosmosArt ?: return
+              val contentPending = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java).apply { flags = Intent.FLAG_ACTIVITY_SINGLE_TOP }, PendingIntent.FLAG_IMMUTABLE)
+              val prevPending = PendingIntent.getBroadcast(this, 1, Intent("COSMOS_PREV"), PendingIntent.FLAG_IMMUTABLE)
+              val togglePending = PendingIntent.getBroadcast(this, 2, Intent("COSMOS_TOGGLE"), PendingIntent.FLAG_IMMUTABLE)
+              val nextPending = PendingIntent.getBroadcast(this, 3, Intent("COSMOS_NEXT"), PendingIntent.FLAG_IMMUTABLE)
+              val playPauseIcon = if (isPlaying) R.drawable.ic_action_pause else R.drawable.ic_action_play
+
+              val notification = Notification.Builder(this, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_cosmos_notif)
+                .setLargeIcon(artBitmap)
+                .setContentTitle(track.title)
+                .setContentText("${track.artist} • ${track.album}")
+                .setSubText("COSMOS")
+                .setContentIntent(contentPending)
+                .setOngoing(isPlaying)
+                .setVisibility(Notification.VISIBILITY_PUBLIC)
+                .setColor(Color.parseColor("#6b21a8"))
+                .setColorized(true)
+                .addAction(Notification.Action.Builder(Icon.createWithResource(this, R.drawable.ic_action_prev), "Anterior", prevPending).build())
+                .addAction(Notification.Action.Builder(Icon.createWithResource(this, playPauseIcon), if (isPlaying) "Pausa" else "Play", togglePending).build())
+                .addAction(Notification.Action.Builder(Icon.createWithResource(this, R.drawable.ic_action_next), "Siguiente", nextPending).build())
+                .setStyle(Notification.MediaStyle().setMediaSession(mediaSession?.sessionToken).setShowActionsInCompactView(0, 1, 2))
+                .build()
+
+              latestNotification = notification
+              getSystemService(NotificationManager::class.java).notify(777, notification)
+
+              if (!isForegroundServiceRunning && isPlaying) {
+                isForegroundServiceRunning = true
+                val sIntent = Intent(this, CosmosPlaybackService::class.java)
+                try {
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(sIntent) else startService(sIntent)
+                } catch (_: Exception) {}
+              }
+            }
+
+            // Mapa de bits ligero de 256x256 para no saturar nunca el buffer IPC de Android
+            private fun loadCompactAlbumArt(albumId: Long): Bitmap {
+              if (albumId >= 0) {
+                try {
+                  val artUri = ContentUris.withAppendedId(Uri.parse("content://media/external/audio/albumart"), albumId)
+                  contentResolver.openInputStream(artUri)?.use { s ->
+                    val opts = BitmapFactory.Options().apply { inSampleSize = 2 }
+                    BitmapFactory.decodeStream(s, null, opts)?.let { decoded ->
+                      val scaled = Bitmap.createScaledBitmap(decoded, 256, 256, true)
+                      val copy = scaled.copy(Bitmap.Config.ARGB_8888, true)
+                      Canvas(copy).drawRect(0f, 0f, 256f, 256f, Paint().apply { color = Color.argb(40, 126, 34, 206) })
+                      return copy
+                    }
+                  }
+                } catch (_: Exception) {}
+              }
+              return fallbackCosmosArt!!
+            }
+
+            private fun createCosmosPurpleArtwork(): Bitmap {
+              val bmp = Bitmap.createBitmap(256, 256, Bitmap.Config.ARGB_8888)
+              val canvas = Canvas(bmp)
+              val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                shader = LinearGradient(0f, 0f, 256f, 256f, intArrayOf(Color.parseColor("#3b0764"), Color.parseColor("#7e22ce"), Color.parseColor("#1e0536")), floatArrayOf(0f, 0.5f, 1f), Shader.TileMode.CLAMP)
+              }
+              canvas.drawRect(0f, 0f, 256f, 256f, paint)
+              try {
+                assets.open("ic_launcher.png").use { s ->
+                  BitmapFactory.decodeStream(s)?.let { canvas.drawBitmap(Bitmap.createScaledBitmap(it, 170, 170, true), 43f, 43f, null) }
+                }
+              } catch (_: Exception) {}
+              return bmp
             }
 
             private fun requestBatteryOptimizationExemption() {
@@ -554,7 +769,7 @@ jobs:
                   contentResolver.openInputStream(artUri)?.use { s ->
                     val decoded = BitmapFactory.decodeStream(s, null, BitmapFactory.Options().apply { inSampleSize = 4 })
                     if (decoded != null) {
-                      val bytes = bitmapToJpegBytes(Bitmap.createScaledBitmap(decoded, 140, 140, true), 82)
+                      val bytes = bitmapToJpegBytes(Bitmap.createScaledBitmap(decoded, 128, 128, true), 80)
                       thumbCache.put(albumId, bytes)
                       return WebResourceResponse("image/jpeg", null, 200, "OK", headers, ByteArrayInputStream(bytes))
                     }
@@ -567,7 +782,7 @@ jobs:
                 val artUri = ContentUris.withAppendedId(Uri.parse("content://media/external/audio/albumart"), albumId)
                 return try {
                   val s = contentResolver.openInputStream(artUri) ?: return null
-                  WebResourceResponse("image/jpeg", null, 200, "OK", headers, BufferedInputStream(s, 65536))
+                  WebResourceResponse("image/jpeg", null, 200, "OK", headers, BufferedInputStream(s, 32768))
                 } catch (_: Exception) {
                   val fb = fallbackThumbBytes ?: return null
                   WebResourceResponse("image/jpeg", null, 200, "OK", headers, ByteArrayInputStream(fb))
@@ -575,61 +790,16 @@ jobs:
               }
             }
 
-            private fun requestCosmosAudioFocus() {
-              val attrs = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build()
-              focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-                .setAudioAttributes(attrs).setAcceptsDelayedFocusGain(true).setWillPauseWhenDucked(false)
-                .setOnAudioFocusChangeListener { change ->
-                  when (change) {
-                    AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> try { mediaPlayer?.setVolume(0.35f, 0.35f) } catch (_: Exception) {}
-                    AudioManager.AUDIOFOCUS_GAIN -> try { mediaPlayer?.setVolume(1.0f, 1.0f) } catch (_: Exception) {}
-                    AudioManager.AUDIOFOCUS_LOSS -> pauseNative()
-                  }
-                }.build()
-              focusRequest?.let { audioManager.requestAudioFocus(it) }
-            }
-
-            private fun createCosmosPurpleArtwork(): Bitmap {
-              val bmp = Bitmap.createBitmap(512, 512, Bitmap.Config.ARGB_8888)
-              val canvas = Canvas(bmp)
-              val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                shader = LinearGradient(0f, 0f, 512f, 512f, intArrayOf(Color.parseColor("#3b0764"), Color.parseColor("#7e22ce"), Color.parseColor("#1e0536")), floatArrayOf(0f, 0.5f, 1f), Shader.TileMode.CLAMP)
-              }
-              canvas.drawRect(0f, 0f, 512f, 512f, paint)
-              try {
-                assets.open("ic_launcher.png").use { s ->
-                  BitmapFactory.decodeStream(s)?.let { canvas.drawBitmap(Bitmap.createScaledBitmap(it, 340, 340, true), 86f, 86f, null) }
-                }
-              } catch (_: Exception) {}
-              return bmp
-            }
-
-            private fun loadAlbumArtBitmap(albumId: Long): Bitmap {
-              if (albumId >= 0) {
-                try {
-                  val artUri = ContentUris.withAppendedId(Uri.parse("content://media/external/audio/albumart"), albumId)
-                  contentResolver.openInputStream(artUri)?.use { s ->
-                    BitmapFactory.decodeStream(s)?.let { decoded ->
-                      val copy = decoded.copy(Bitmap.Config.ARGB_8888, true)
-                      Canvas(copy).drawRect(0f, 0f, copy.width.toFloat(), copy.height.toFloat(), Paint().apply { color = Color.argb(45, 126, 34, 206) })
-                      return copy
-                    }
-                  }
-                } catch (_: Exception) {}
-              }
-              return fallbackCosmosArt ?: Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
-            }
-
             private fun setupMediaSessionAndChannel() {
-              val channel = NotificationChannel(CHANNEL_ID, "COSMOS Native Audio", NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) }
+              val channel = NotificationChannel(CHANNEL_ID, "COSMOS Audio", NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) }
               getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
-              mediaSession = MediaSession(this, "CosmosNativeSession").apply {
+              mediaSession = MediaSession(this, "CosmosFinalSession").apply {
                 setCallback(object : MediaSession.Callback() {
-                  override fun onPlay() { runOnUiThread { playNative() } }
-                  override fun onPause() { runOnUiThread { pauseNative() } }
-                  override fun onSkipToNext() { runOnUiThread { nextTrackNative() } }
-                  override fun onSkipToPrevious() { runOnUiThread { prevTrackNative() } }
-                  override fun onSeekTo(pos: Long) { runOnUiThread { seekToMsNative(pos) } }
+                  override fun onPlay() { dispatchPlay() }
+                  override fun onPause() { dispatchPause() }
+                  override fun onSkipToNext() { dispatchNext() }
+                  override fun onSkipToPrevious() { dispatchPrev() }
+                  override fun onSeekTo(pos: Long) { dispatchSeekToMs(pos.toInt()) }
                 })
                 isActive = true
               }
@@ -683,28 +853,28 @@ jobs:
                   }
                 }
                 val jsonStr = arr.toString()
-                runOnUiThread {
+                uiHandler.post {
                   trackList.clear(); trackList.addAll(scanned)
                   activeQueueIndices = trackList.indices.toMutableList()
                   webView.evaluateJavascript("window.onNativeLibraryLoaded(${JSONObject.quote(jsonStr)});", null)
-                  if (trackList.isNotEmpty() && currentIndex == -1) loadTrackNative(0, false)
+                  if (trackList.isNotEmpty() && currentIndex == -1) dispatchLoadTrack(0, false)
                 }
               }.start()
             }
 
             inner class CosmosBridge {
-              @JavascriptInterface fun rescanMediaStore() { runOnUiThread { checkPermissionsAndScan() } }
-              @JavascriptInterface fun loadTrack(idx: Int, autoPlay: Boolean) { runOnUiThread { loadTrackNative(idx, autoPlay) } }
-              @JavascriptInterface fun togglePlay() { runOnUiThread { togglePlayNative() } }
-              @JavascriptInterface fun playAudio() { runOnUiThread { playNative() } }
-              @JavascriptInterface fun pauseAudio() { runOnUiThread { pauseNative() } }
-              @JavascriptInterface fun prevTrack() { runOnUiThread { prevTrackNative() } }
-              @JavascriptInterface fun nextTrack() { runOnUiThread { nextTrackNative() } }
-              @JavascriptInterface fun seekToPercent(pct: Double) { runOnUiThread { seekToPercentNative(pct) } }
-              @JavascriptInterface fun seekByDeltaMs(deltaMs: Int) { runOnUiThread { seekByDeltaMsNative(deltaMs) } }
-              @JavascriptInterface fun setShuffleAndRepeat(shuffle: Boolean, repeat: Int) { runOnUiThread { shuffleMode = shuffle; repeatMode = repeat } }
+              @JavascriptInterface fun rescanMediaStore() { uiHandler.post { checkPermissionsAndScan() } }
+              @JavascriptInterface fun loadTrack(idx: Int, autoPlay: Boolean) { dispatchLoadTrack(idx, autoPlay) }
+              @JavascriptInterface fun togglePlay() { dispatchTogglePlay() }
+              @JavascriptInterface fun playAudio() { dispatchPlay() }
+              @JavascriptInterface fun pauseAudio() { dispatchPause() }
+              @JavascriptInterface fun prevTrack() { dispatchPrev() }
+              @JavascriptInterface fun nextTrack() { dispatchNext() }
+              @JavascriptInterface fun seekToPercent(pct: Double) { dispatchSeekPercent(pct) }
+              @JavascriptInterface fun seekByDeltaMs(deltaMs: Int) { dispatchSeekDelta(deltaMs) }
+              @JavascriptInterface fun setShuffleAndRepeat(shuffle: Boolean, repeat: Int) { shuffleMode = shuffle; repeatMode = repeat }
               @JavascriptInterface fun setActiveQueue(jsonIndices: String) {
-                runOnUiThread {
+                audioHandler.post {
                   try {
                     val arr = JSONArray(jsonIndices)
                     val list = mutableListOf<Int>()
@@ -714,21 +884,21 @@ jobs:
                 }
               }
               @JavascriptInterface fun setEqBand(bandIdx: Int, dbVal: Int) {
-                runOnUiThread { if (bandIdx in currentEqGainsDb.indices) { currentEqGainsDb[bandIdx] = dbVal; applyEqGainsToHardware() } }
+                audioHandler.post { if (bandIdx in currentEqGainsDb.indices) { currentEqGainsDb[bandIdx] = dbVal; applyEqGainsInternal() } }
               }
               @JavascriptInterface fun setEqPresetGains(g0: Int, g1: Int, g2: Int, g3: Int, g4: Int) {
-                runOnUiThread { currentEqGainsDb = intArrayOf(g0, g1, g2, g3, g4); applyEqGainsToHardware() }
+                audioHandler.post { currentEqGainsDb = intArrayOf(g0, g1, g2, g3, g4); applyEqGainsInternal() }
               }
               @JavascriptInterface fun updateTrackMetadata(idx: Int, title: String, artist: String, album: String) {
-                runOnUiThread {
+                audioHandler.post {
                   if (idx in trackList.indices) {
                     trackList[idx].title = title; trackList[idx].artist = artist; trackList[idx].album = album
-                    if (idx == currentIndex) updateNotificationAndSession()
+                    if (idx == currentIndex) syncStateToUiAndNotif(updateNotifCard = true)
                   }
                 }
               }
               @JavascriptInterface fun shareTrackNative(mediaId: Long, title: String, artist: String, album: String) {
-                runOnUiThread {
+                uiHandler.post {
                   try {
                     val si = Intent(Intent.ACTION_SEND)
                     if (mediaId > 0) {
@@ -743,61 +913,12 @@ jobs:
               }
             }
 
-            private fun updateNotificationAndSession() {
-              if (currentIndex < 0 || currentIndex >= trackList.size) return
-              val track = trackList[currentIndex]
-              val isPlaying = isPlayerPrepared && (mediaPlayer?.isPlaying == true)
-              val posMs = if (isPlayerPrepared) (mediaPlayer?.currentPosition?.toLong() ?: 0L) else 0L
-              val durMs = if (isPlayerPrepared) (mediaPlayer?.duration?.toLong() ?: track.durationMs) else track.durationMs
-              val artBitmap = currentArtBitmap ?: fallbackCosmosArt ?: Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
-
-              val state = if (isPlaying) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED
-              val actions = PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or PlaybackState.ACTION_SKIP_TO_NEXT or PlaybackState.ACTION_SKIP_TO_PREVIOUS or PlaybackState.ACTION_SEEK_TO
-              mediaSession?.setPlaybackState(PlaybackState.Builder().setActions(actions).setState(state, posMs, if (isPlaying) 1.0f else 0f).build())
-              mediaSession?.setMetadata(MediaMetadata.Builder()
-                .putString(MediaMetadata.METADATA_KEY_TITLE, track.title)
-                .putString(MediaMetadata.METADATA_KEY_ARTIST, "${track.artist} • ${track.album}")
-                .putString(MediaMetadata.METADATA_KEY_ALBUM, "COSMOS • Belmont Edition")
-                .putLong(MediaMetadata.METADATA_KEY_DURATION, if (durMs > 0) durMs else -1L)
-                .putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, artBitmap)
-                .putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, artBitmap).build())
-
-              val contentPending = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java).apply { flags = Intent.FLAG_ACTIVITY_SINGLE_TOP }, PendingIntent.FLAG_IMMUTABLE)
-              val prevPending = PendingIntent.getBroadcast(this, 1, Intent("COSMOS_PREV"), PendingIntent.FLAG_IMMUTABLE)
-              val togglePending = PendingIntent.getBroadcast(this, 2, Intent("COSMOS_TOGGLE"), PendingIntent.FLAG_IMMUTABLE)
-              val nextPending = PendingIntent.getBroadcast(this, 3, Intent("COSMOS_NEXT"), PendingIntent.FLAG_IMMUTABLE)
-              val playPauseIcon = if (isPlaying) R.drawable.ic_action_pause else R.drawable.ic_action_play
-
-              val notification = Notification.Builder(this, CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_cosmos_notif)
-                .setLargeIcon(artBitmap)
-                .setContentTitle(track.title)
-                .setContentText("${track.artist} • ${track.album}")
-                .setSubText("COSMOS")
-                .setContentIntent(contentPending)
-                .setOngoing(isPlaying)
-                .setVisibility(Notification.VISIBILITY_PUBLIC)
-                .setColor(Color.parseColor("#6b21a8"))
-                .setColorized(true)
-                .addAction(Notification.Action.Builder(Icon.createWithResource(this, R.drawable.ic_action_prev), "Anterior", prevPending).build())
-                .addAction(Notification.Action.Builder(Icon.createWithResource(this, playPauseIcon), if (isPlaying) "Pausa" else "Play", togglePending).build())
-                .addAction(Notification.Action.Builder(Icon.createWithResource(this, R.drawable.ic_action_next), "Siguiente", nextPending).build())
-                .setStyle(Notification.MediaStyle().setMediaSession(mediaSession?.sessionToken).setShowActionsInCompactView(0, 1, 2))
-                .build()
-
-              latestNotification = notification
-              getSystemService(NotificationManager::class.java).notify(777, notification)
-              val sIntent = Intent(this, CosmosPlaybackService::class.java).apply { putExtra("IS_PLAYING", isPlaying) }
-              try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(sIntent) else startService(sIntent)
-              } catch (_: Exception) {}
-            }
-
-            override fun onResume() { super.onResume(); isUiVisible = true; syncFullTrackToWeb() }
+            override fun onResume() { super.onResume(); isUiVisible = true; syncStateToUiAndNotif(updateNotifCard = false) }
             override fun onPause() { super.onPause(); isUiVisible = false }
             override fun onDestroy() {
               uiHandler.removeCallbacksAndMessages(null)
-              try { hardwareEq?.release(); mediaPlayer?.release() } catch (_: Exception) {}
+              audioHandler.removeCallbacksAndMessages(null)
+              try { hardwareEq?.release(); mediaPlayer?.release(); audioThread.quitSafely() } catch (_: Exception) {}
               unregisterReceiver(mediaActionReceiver)
               mediaSession?.release()
               super.onDestroy()
@@ -805,287 +926,387 @@ jobs:
           }
           EOF
 
+          # INTERFAZ 100% CSS NATIVO Y SVG INCRUSTADOS (CERO LIBRERIAS EXTERNAS, CERO OBSERVER LAG, 120 FPS OFFLINE)
           cat << 'EOF' > app/src/main/assets/index.html
           <!DOCTYPE html>
           <html lang="es">
           <head>
             <meta charset="UTF-8" />
             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-            <title>COSMOS 2027</title>
-            <script src="https://cdn.tailwindcss.com"></script>
-            <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
+            <title>COSMOS</title>
             <style>
-              @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Montserrat:wght@200;300;400;600&display=swap');
-              body { background-color: #040109; color: #f5f0ff; font-family: 'Plus Jakarta Sans', sans-serif; overflow-x: hidden; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
-              .cosmos-bg { background-color: #040109; background-image: radial-gradient(circle at 18% 0%, rgba(192,38,211,0.25) 0%, transparent 45%), radial-gradient(circle at 85% 12%, rgba(124,58,237,0.28) 0%, transparent 50%), radial-gradient(circle at 50% 65%, rgba(217,70,239,0.12) 0%, transparent 55%); }
-              .digital-cosmos { font-family: 'Share Tech Mono', monospace; letter-spacing: 0.28em; text-shadow: 0 0 14px rgba(217,70,239,0.85); }
-              .belmont-thin { font-family: 'Montserrat', sans-serif; font-weight: 300; letter-spacing: 0.36em; }
-              .glass-bar { background: rgba(16,6,30,0.90); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border: 1px solid rgba(232,121,249,0.22); }
-              .card-2027 { background: linear-gradient(145deg, rgba(28,12,52,0.92) 0%, rgba(12,4,24,0.96) 100%); border: 1px solid rgba(216,180,254,0.15); box-shadow: 0 4px 14px rgba(0,0,0,0.45); }
-              .song-row-fast { background: linear-gradient(145deg, rgba(24,10,44,0.88) 0%, rgba(11,4,22,0.94) 100%); border: 1px solid rgba(192,132,252,0.12); content-visibility: auto; contain-intrinsic-size: 68px; transform: translateZ(0); }
-              .song-row-active { background: linear-gradient(145deg, rgba(88,28,135,0.68) 0%, rgba(28,10,52,0.96) 100%) !important; border: 1px solid rgba(240,171,252,0.68) !important; }
-              .glass-pill { background: rgba(26,11,48,0.92); border: 1px solid rgba(192,132,252,0.24); }
-              .cover-2027 { border-radius: 26px; border: 1px solid rgba(255,255,255,0.18); box-shadow: 0 20px 45px rgba(0,0,0,0.8), 0 0 32px rgba(192,38,211,0.32); }
-              .cover-row { border-radius: 14px; border: 1px solid rgba(232,121,249,0.20); }
-              @keyframes letterGlow { 0% { opacity: 0.1; transform: translateY(6px); } 50% { opacity: 1; color: #fff; text-shadow: 0 0 18px #e879f9; transform: translateY(0); } 100% { opacity: 1; color: #f3e8ff; text-shadow: 0 0 10px #d946ef; transform: translateY(0); } }
-              .splash-letter { display: inline-block; opacity: 0.1; animation: letterGlow 0.8s ease-out forwards; }
-              input[type="range"] { -webkit-appearance: none; appearance: none; background: rgba(88,28,135,0.55); height: 6px; border-radius: 999px; outline: none; }
-              input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 16px; height: 16px; border-radius: 50%; background: #fff; border: 2px solid #e879f9; box-shadow: 0 0 10px #d946ef; cursor: pointer; }
-              .no-scrollbar::-webkit-scrollbar { display: none; }
+              * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none; }
+              body {
+                background-color: #040109;
+                background-image:
+                  radial-gradient(circle at 15% 0%, rgba(192,38,211,0.24) 0%, transparent 45%),
+                  radial-gradient(circle at 85% 12%, rgba(124,58,237,0.26) 0%, transparent 50%);
+                color: #f5f0ff;
+                font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+                min-height: 100vh;
+                padding-bottom: 155px;
+                overflow-x: hidden;
+              }
+              button { background: none; border: none; color: inherit; font: inherit; cursor: pointer; outline: none; }
+              button:active { transform: scale(0.95); }
+              .digital-cosmos { font-family: monospace; letter-spacing: 0.28em; text-shadow: 0 0 12px rgba(217,70,239,0.8); font-weight: 800; }
+              .belmont-sub { font-size: 8px; letter-spacing: 0.34em; text-transform: uppercase; color: #f0abfc; margin-top: 3px; }
+              .header-bar {
+                position: sticky; top: 0; z-index: 30;
+                background: rgba(13, 5, 26, 0.94);
+                border-bottom: 1px solid rgba(232,121,249,0.22);
+                border-radius: 0 0 24px 24px;
+                padding: 12px 16px;
+                display: flex; align-items: center; justify-content: space-between;
+              }
+              .pill {
+                background: rgba(28, 12, 52, 0.92);
+                border: 1px solid rgba(192,132,252,0.25);
+                border-radius: 999px;
+              }
+              .btn-grad {
+                background: linear-gradient(90deg, #9333ea, #d946ef, #ec4899);
+                color: #fff; font-weight: 700; border-radius: 999px;
+                box-shadow: 0 4px 14px rgba(217,70,239,0.35);
+              }
+              .search-wrap { padding: 14px 16px 6px; position: relative; }
+              .search-input {
+                width: 100%; padding: 11px 16px 11px 38px;
+                background: rgba(24, 10, 44, 0.9);
+                border: 1px solid rgba(192,132,252,0.24);
+                border-radius: 999px; color: #fff; font-size: 13px; outline: none;
+              }
+              .bento-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 8px 16px; }
+              .bento-card {
+                background: linear-gradient(145deg, rgba(30,13,56,0.92), rgba(12,4,24,0.96));
+                border: 1px solid rgba(216,180,254,0.16);
+                border-radius: 18px; padding: 10px;
+                display: flex; align-items: center; gap: 8px; text-align: left;
+              }
+              .bento-icon {
+                width: 34px; height: 34px; border-radius: 11px;
+                display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 14px;
+              }
+              .tabs-row { display: flex; gap: 8px; padding: 10px 16px; overflow-x: auto; scrollbar-width: none; }
+              .tabs-row::-webkit-scrollbar { display: none; }
+              .tab-btn { padding: 7px 15px; font-size: 12px; font-weight: 600; white-space: nowrap; border-radius: 999px; }
+              .song-list { padding: 4px 16px; display: flex; flex-direction: column; gap: 8px; }
+              .song-row {
+                background: linear-gradient(145deg, rgba(24,10,44,0.9), rgba(11,4,22,0.95));
+                border: 1px solid rgba(192,132,252,0.13);
+                border-radius: 16px; padding: 9px 11px;
+                display: flex; align-items: center; justify-content: space-between; gap: 10px;
+                content-visibility: auto; contain-intrinsic-size: 66px;
+              }
+              .song-row.active {
+                background: linear-gradient(145deg, rgba(91,33,182,0.65), rgba(32,10,60,0.96));
+                border-color: #f0abfc;
+              }
+              .cover-sm { width: 48px; height: 48px; border-radius: 12px; object-fit: cover; background: #1a0833; border: 1px solid rgba(232,121,249,0.22); flex-shrink: 0; }
+              .cover-lg { width: 280px; height: 280px; border-radius: 26px; object-fit: cover; background: #1a0833; border: 1px solid rgba(255,255,255,0.2); box-shadow: 0 18px 42px rgba(0,0,0,0.85), 0 0 28px rgba(192,38,211,0.32); }
+              .truncate { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+              .mini-dock {
+                position: fixed; bottom: 10px; left: 10px; right: 10px; z-index: 40;
+                background: rgba(15, 6, 29, 0.96);
+                border: 1px solid rgba(232,121,249,0.32);
+                border-radius: 24px; padding: 11px 13px;
+                box-shadow: 0 14px 34px rgba(0,0,0,0.9);
+              }
+              .modal-full {
+                position: fixed; inset: 0; z-index: 50;
+                background: #05010a;
+                background-image: radial-gradient(circle at 50% 22%, rgba(147,51,234,0.32) 0%, transparent 55%);
+                display: none; flex-direction: column; justify-content: space-between;
+                padding: 20px; overflow-y: auto;
+              }
+              .modal-overlay {
+                position: fixed; inset: 0; z-index: 70;
+                background: rgba(0,0,0,0.82);
+                display: none; align-items: center; justify-content: center; padding: 16px;
+              }
+              .show-flex { display: flex !important; }
+              .modal-box {
+                background: linear-gradient(145deg, #1b0a33, #0b0317);
+                border: 1px solid rgba(232,121,249,0.3);
+                border-radius: 24px; width: 100%; max-width: 400px; padding: 20px;
+              }
+              input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 6px; background: rgba(107,33,168,0.55); border-radius: 999px; outline: none; }
+              input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 16px; height: 16px; border-radius: 50%; background: #fff; border: 2px solid #e879f9; box-shadow: 0 0 8px #d946ef; }
+              .toast {
+                position: fixed; top: 76px; left: 50%; transform: translateX(-50%); z-index: 95;
+                padding: 8px 18px; border-radius: 999px; font-size: 12px; font-weight: 700;
+                background: linear-gradient(90deg, #7e22ce, #db2777); color: #fff;
+                opacity: 0; pointer-events: none; transition: opacity 0.2s;
+              }
             </style>
           </head>
-          <body class="cosmos-bg min-h-screen flex flex-col justify-between pb-44">
-            <div id="welcomeSplash" class="fixed inset-0 z-[100] bg-[#040109] flex flex-col items-center justify-center overflow-hidden transition-opacity duration-500">
-              <img src="splash_bg.png" onerror="this.style.display='none'" class="absolute inset-0 w-full h-full object-cover opacity-35 pointer-events-none" />
-              <div class="relative z-10 flex flex-col items-center px-6">
-                <div class="w-32 h-32 mb-6 rounded-3xl p-1 bg-gradient-to-tr from-purple-600/40 to-fuchsia-500/40 shadow-[0_0_32px_rgba(217,70,239,0.5)] flex items-center justify-center">
-                  <img src="ic_launcher.png" onerror="this.src=window.defaultLogoDataUri" class="w-full h-full rounded-3xl object-contain" />
-                </div>
-                <div class="digital-cosmos text-3xl sm:text-4xl font-bold tracking-[0.35em] flex space-x-2">
-                  <span class="splash-letter" style="animation-delay:0.05s">C</span><span class="splash-letter" style="animation-delay:0.14s">O</span><span class="splash-letter" style="animation-delay:0.23s">S</span><span class="splash-letter" style="animation-delay:0.32s">M</span><span class="splash-letter" style="animation-delay:0.41s">O</span><span class="splash-letter" style="animation-delay:0.50s">S</span>
-                </div>
-                <p class="belmont-thin text-[10px] text-fuchsia-300/90 uppercase mt-3 tracking-[0.45em] splash-letter" style="animation-delay:0.65s">Belmont Edition • Native Engine</p>
-                <div class="w-48 h-1 rounded-full bg-purple-950 mt-8 overflow-hidden"><div id="splashBar" class="h-full bg-gradient-to-r from-purple-600 via-fuchsia-400 to-white rounded-full transition-all duration-700" style="width:15%"></div></div>
+          <body>
+            <!-- SPLASH DE BIENVENIDA -->
+            <div id="welcomeSplash" style="position:fixed;inset:0;z-index:100;background:#040109;display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity 0.4s;">
+              <img src="splash_bg.png" onerror="this.style.display='none'" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0.35;pointer-events:none;" />
+              <div style="position:relative;z-index:2;display:flex;flex-direction:column;align-items:center;">
+                <img src="ic_launcher.png" onerror="this.src=window.defaultLogoDataUri" style="width:115px;height:115px;border-radius:26px;margin-bottom:20px;box-shadow:0 0 30px rgba(217,70,239,0.5);" />
+                <div class="digital-cosmos" style="font-size:30px;color:#fff;">COSMOS</div>
+                <div class="belmont-sub" style="margin-top:8px;">Belmont Edition • 2027</div>
               </div>
             </div>
 
-            <header class="sticky top-0 z-30 glass-bar px-4 py-3 flex items-center justify-between border-b border-fuchsia-500/20 rounded-b-3xl">
-              <div class="flex items-center gap-3">
-                <div class="w-11 h-11 rounded-2xl bg-[#090314] border border-fuchsia-400/50 flex items-center justify-center shadow-[0_0_16px_rgba(217,70,239,0.35)] overflow-hidden">
-                  <img id="headerLogoImg" src="ic_launcher.png" class="w-full h-full object-cover" />
-                </div>
+            <!-- HEADER -->
+            <header class="header-bar">
+              <div style="display:flex;align-items:center;gap:11px;">
+                <img id="headerLogoImg" src="ic_launcher.png" style="width:42px;height:42px;border-radius:13px;border:1px solid rgba(232,121,249,0.5);object-fit:cover;" />
                 <div>
-                  <h1 class="digital-cosmos text-lg font-bold text-transparent bg-clip-text bg-gradient-to-r from-white via-fuchsia-200 to-purple-400 leading-none">COSMOS</h1>
-                  <p class="belmont-thin text-[7.5px] text-fuchsia-300 uppercase tracking-[0.32em] mt-1">Belmont Edition</p>
+                  <div class="digital-cosmos" style="font-size:17px;color:#fff;">COSMOS</div>
+                  <div class="belmont-sub">Belmont Edition</div>
                 </div>
               </div>
-              <div class="flex items-center gap-2">
-                <button onclick="openModal('timerModal')" class="px-3 py-1.5 rounded-full glass-pill text-xs text-purple-200 flex items-center gap-1.5 active:scale-95"><i class="fa-regular fa-clock text-fuchsia-400 text-[11px]"></i><span id="timerText" class="text-[10px] font-mono">Off</span></button>
-                <button onclick="openModal('eqModal')" class="w-9 h-9 rounded-full glass-pill text-purple-200 flex items-center justify-center active:scale-95"><i class="fa-solid fa-sliders text-xs text-fuchsia-300"></i></button>
-                <button onclick="rescanPhoneLibrary()" class="px-3.5 py-1.5 rounded-full bg-gradient-to-r from-purple-600 via-fuchsia-600 to-pink-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-md active:scale-95"><i class="fa-solid fa-rotate"></i></button>
+              <div style="display:flex;align-items:center;gap:7px;">
+                <button onclick="openModal('timerModal')" class="pill" style="padding:6px 11px;font-size:11px;display:flex;align-items:center;gap:5px;">
+                  <span>⏱</span><span id="timerText" style="font-family:monospace;">Off</span>
+                </button>
+                <button onclick="openModal('eqModal')" class="pill" style="width:35px;height:35px;display:flex;align-items:center;justify-content:center;font-size:13px;">🎚</button>
+                <button onclick="rescanPhoneLibrary()" class="btn-grad" style="padding:6px 13px;font-size:12px;">↻</button>
               </div>
             </header>
 
-            <div class="px-4 pt-3.5">
-              <div class="relative">
-                <i class="fa-solid fa-magnifying-glass absolute left-4 top-3.5 text-fuchsia-400/70 text-xs"></i>
-                <input type="text" id="searchInput" oninput="renderLibrary()" placeholder="¿Qué quieres escuchar hoy, Edward?" class="w-full pl-10 pr-4 py-2.5 rounded-full glass-pill text-xs sm:text-sm text-purple-100 placeholder-purple-300/45 focus:outline-none focus:border-fuchsia-400" />
-              </div>
+            <!-- BUSCADOR -->
+            <div class="search-wrap">
+              <span style="position:absolute;left:29px;top:24px;font-size:12px;opacity:0.65;">🔍</span>
+              <input type="text" id="searchInput" oninput="renderLibrary()" placeholder="¿Qué quieres escuchar hoy, Edward?" class="search-input" />
             </div>
 
-            <div class="px-4 pt-3 grid grid-cols-3 gap-2">
-              <button onclick="switchTab('favorites')" class="card-2027 rounded-2xl p-2.5 flex items-center gap-2.5 active:scale-95 text-left">
-                <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-pink-500 via-fuchsia-600 to-purple-800 flex items-center justify-center text-white shadow shrink-0"><i class="fa-solid fa-heart text-xs"></i></div>
-                <div class="min-w-0"><div class="text-[11px] font-bold text-white truncate">Me Gusta</div><div id="bentoLikesCount" class="text-[9px] text-fuchsia-300/80 font-medium">0 pistas</div></div>
+            <!-- BENTO ACCESO RAPIDO -->
+            <div class="bento-grid">
+              <button onclick="switchTab('favorites')" class="bento-card">
+                <div class="bento-icon" style="background:linear-gradient(135deg,#ec4899,#7e22ce);">❤️</div>
+                <div class="truncate"><div style="font-size:11px;font-weight:700;color:#fff;">Me Gusta</div><div id="bentoLikesCount" style="font-size:9px;color:#f0abfc;">0 pistas</div></div>
               </button>
-              <button onclick="openCreatePlaylistModal()" class="card-2027 rounded-2xl p-2.5 flex items-center gap-2.5 active:scale-95 text-left">
-                <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-purple-500 to-indigo-800 flex items-center justify-center text-white shadow shrink-0"><i class="fa-solid fa-plus text-xs"></i></div>
-                <div class="min-w-0"><div class="text-[11px] font-bold text-white truncate">Crear Lista</div><div id="bentoPlaylistsCount" class="text-[9px] text-purple-300/80 font-medium">Playlists</div></div>
+              <button onclick="openCreatePlaylistModal()" class="bento-card">
+                <div class="bento-icon" style="background:linear-gradient(135deg,#8b5cf6,#4338ca);">➕</div>
+                <div class="truncate"><div style="font-size:11px;font-weight:700;color:#fff;">Crear Lista</div><div id="bentoPlaylistsCount" style="font-size:9px;color:#d8b4fe;">Playlists</div></div>
               </button>
-              <button onclick="playRandomMix()" class="card-2027 rounded-2xl p-2.5 flex items-center gap-2.5 active:scale-95 text-left">
-                <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-fuchsia-500 to-purple-700 flex items-center justify-center text-white shadow shrink-0"><i class="fa-solid fa-wand-magic-sparkles text-xs"></i></div>
-                <div class="min-w-0"><div class="text-[11px] font-bold text-white truncate">Mix Cosmos</div><div class="text-[9px] text-fuchsia-300/80 font-medium">Aleatorio</div></div>
+              <button onclick="playRandomMix()" class="bento-card">
+                <div class="bento-icon" style="background:linear-gradient(135deg,#d946ef,#6b21a8);">🔀</div>
+                <div class="truncate"><div style="font-size:11px;font-weight:700;color:#fff;">Mix Cosmos</div><div style="font-size:9px;color:#f0abfc;">Aleatorio</div></div>
               </button>
             </div>
 
-            <nav class="flex gap-2 px-4 py-3 overflow-x-auto no-scrollbar">
-              <button onclick="switchTab('songs')" id="tab-songs" class="px-4 py-1.5 rounded-full text-xs font-bold bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white shadow-md whitespace-nowrap flex items-center gap-1">Canciones (<span id="countSongs">0</span>)</button>
-              <button onclick="switchTab('favorites')" id="tab-favorites" class="px-4 py-1.5 rounded-full text-xs font-semibold glass-pill text-purple-200/85 whitespace-nowrap flex items-center gap-1"><i class="fa-solid fa-heart text-pink-400 text-[10px]"></i> Favoritos</button>
-              <button onclick="switchTab('playlists')" id="tab-playlists" class="px-4 py-1.5 rounded-full text-xs font-semibold glass-pill text-purple-200/85 whitespace-nowrap flex items-center gap-1">Playlists</button>
-              <button onclick="switchTab('artists')" id="tab-artists" class="px-4 py-1.5 rounded-full text-xs font-semibold glass-pill text-purple-200/85 whitespace-nowrap flex items-center gap-1">Artistas</button>
-              <button onclick="switchTab('albums')" id="tab-albums" class="px-4 py-1.5 rounded-full text-xs font-semibold glass-pill text-purple-200/85 whitespace-nowrap flex items-center gap-1">Álbumes</button>
+            <!-- TABS -->
+            <nav class="tabs-row">
+              <button onclick="switchTab('songs')" id="tab-songs" class="tab-btn btn-grad">Canciones (<span id="countSongs">0</span>)</button>
+              <button onclick="switchTab('favorites')" id="tab-favorites" class="tab-btn pill">❤️ Favoritos</button>
+              <button onclick="switchTab('playlists')" id="tab-playlists" class="tab-btn pill">Playlists</button>
+              <button onclick="switchTab('artists')" id="tab-artists" class="tab-btn pill">Artistas</button>
+              <button onclick="switchTab('albums')" id="tab-albums" class="tab-btn pill">Álbumes</button>
             </nav>
 
-            <div class="px-4 pb-1 flex items-center justify-between text-[10px] text-purple-300/60">
-              <span>💡 Mantén presionada una canción para Compartir o Añadir a Playlist</span>
+            <div style="padding:0 16px 6px;font-size:10px;color:rgba(216,180,254,0.6);">
+              💡 Mantén presionada una canción o toca ⋮ para Compartir o Añadir a Playlist
             </div>
 
-            <main id="libraryContainer" class="px-4 flex-1 space-y-2 overflow-y-auto"></main>
+            <!-- LISTA PRINCIPAL -->
+            <main id="libraryContainer" class="song-list"></main>
 
-            <footer class="mt-6 mb-2 text-center pointer-events-none"><p class="belmont-thin text-[8px] uppercase text-purple-300 opacity-35">Desarrollado por Edward Belmont</p></footer>
-
-            <div class="fixed bottom-3 left-3 right-3 z-40">
-              <div class="glass-bar rounded-3xl p-3 border border-fuchsia-400/30 shadow-[0_14px_34px_rgba(0,0,0,0.85)]">
-                <div class="flex items-center justify-between gap-2.5">
-                  <div class="flex items-center gap-3 flex-1 min-w-0 cursor-pointer" onclick="openModal('playerModal')">
-                    <img id="miniCover" src="" class="w-[52px] h-[52px] cover-row object-cover bg-purple-950/60 shrink-0 shadow" />
-                    <div class="min-w-0 flex-1">
-                      <h3 id="miniTitle" class="font-bold text-sm text-white truncate">Selecciona una pista</h3>
-                      <div class="flex items-center gap-2 mt-0.5">
-                        <p id="miniArtist" class="text-xs text-purple-200/75 truncate">COSMOS Native Hi-Fi</p>
-                        <span class="text-[9px] font-mono text-fuchsia-300 bg-purple-950 px-1.5 py-0.2 rounded-full border border-purple-700/40 shrink-0">HI-RES</span>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="flex items-center gap-1">
-                    <button onclick="toggleLikeCurrent()" id="miniLikeBtn" class="w-8 h-8 rounded-full flex items-center justify-center text-purple-300/70 active:scale-90"><i class="fa-regular fa-heart text-sm"></i></button>
-                    <button onclick="prevTrack()" class="w-8 h-8 rounded-full flex items-center justify-center text-purple-200 active:scale-90"><i class="fa-solid fa-backward-step"></i></button>
-                    <button onclick="togglePlay()" id="miniPlayBtn" class="w-11 h-11 rounded-full bg-gradient-to-tr from-purple-600 via-fuchsia-500 to-pink-500 text-white flex items-center justify-center shadow-md active:scale-95"><i class="fa-solid fa-play text-sm"></i></button>
-                    <button onclick="nextTrack()" class="w-8 h-8 rounded-full flex items-center justify-center text-purple-200 active:scale-90"><i class="fa-solid fa-forward-step"></i></button>
+            <!-- MINI REPRODUCTOR CAPSULA -->
+            <div class="mini-dock">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+                <div onclick="openModal('playerModal')" style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;cursor:pointer;">
+                  <img id="miniCover" src="" class="cover-sm" />
+                  <div style="min-width:0;flex:1;">
+                    <div id="miniTitle" class="truncate" style="font-size:13px;font-weight:700;color:#fff;">Selecciona una pista</div>
+                    <div id="miniArtist" class="truncate" style="font-size:11px;color:#d8b4fe;margin-top:2px;">COSMOS Audio Engine</div>
                   </div>
                 </div>
-                <div class="mt-2 flex items-center gap-2 px-1">
-                  <span id="miniCurrentTime" class="text-[10px] text-purple-300/70 w-7 font-mono">0:00</span>
-                  <input type="range" id="miniSeek" value="0" min="0" max="100" step="0.1" oninput="onSeekDrag(this.value)" onchange="onSeekCommit(this.value)" class="flex-1" />
-                  <span id="miniDuration" class="text-[10px] text-purple-300/70 w-7 text-right font-mono">0:00</span>
+                <div style="display:flex;align-items:center;gap:4px;">
+                  <button onclick="toggleLikeCurrent()" id="miniLikeBtn" style="width:32px;height:32px;font-size:15px;">♡</button>
+                  <button onclick="prevTrack()" style="width:32px;height:32px;font-size:15px;">⏮</button>
+                  <button onclick="togglePlay()" id="miniPlayBtn" class="btn-grad" style="width:42px;height:42px;display:flex;align-items:center;justify-content:center;font-size:15px;">▶</button>
+                  <button onclick="nextTrack()" style="width:32px;height:32px;font-size:15px;">⏭</button>
                 </div>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+                <span id="miniCurrentTime" style="font-size:10px;font-family:monospace;color:#d8b4fe;width:30px;">0:00</span>
+                <input type="range" id="miniSeek" value="0" min="0" max="100" step="0.1" oninput="onSeekDrag(this.value)" onchange="onSeekCommit(this.value)" />
+                <span id="miniDuration" style="font-size:10px;font-family:monospace;color:#d8b4fe;width:30px;text-align:right;">0:00</span>
               </div>
             </div>
 
-            <div id="playerModal" class="fixed inset-0 z-50 cosmos-bg hidden flex-col justify-between p-5 sm:p-7 overflow-y-auto">
-              <div class="flex items-center justify-between relative z-10">
-                <button onclick="closeModal('playerModal')" class="w-10 h-10 rounded-full glass-pill text-purple-100 flex items-center justify-center active:scale-90"><i class="fa-solid fa-chevron-down text-sm"></i></button>
-                <div class="text-center">
-                  <span class="digital-cosmos text-[10px] uppercase text-fuchsia-300 block">COSMOS HI-FI ENGINE</span>
-                  <span id="fullAlbumName" class="text-xs font-semibold text-purple-200/90 truncate max-w-[220px] block">Álbum</span>
+            <!-- MODAL REPRODUCTOR COMPLETO -->
+            <div id="playerModal" class="modal-full">
+              <div style="display:flex;align-items:center;justify-content:space-between;">
+                <button onclick="closeModal('playerModal')" class="pill" style="width:40px;height:40px;font-size:16px;">⌄</button>
+                <div style="text-align:center;">
+                  <div class="digital-cosmos" style="font-size:10px;color:#f0abfc;">COSMOS HI-FI</div>
+                  <div id="fullAlbumName" class="truncate" style="font-size:12px;color:#e9d5ff;max-width:210px;margin-top:2px;">Álbum</div>
                 </div>
-                <button onclick="openActionSheet(currentTrackIndex)" class="w-10 h-10 rounded-full glass-pill text-purple-100 flex items-center justify-center active:scale-90"><i class="fa-solid fa-ellipsis-vertical text-sm"></i></button>
+                <button onclick="openActionSheet(currentTrackIndex)" class="pill" style="width:40px;height:40px;font-size:16px;">⋮</button>
               </div>
 
-              <div class="flex-1 flex flex-col items-center justify-center my-4 relative">
-                <div class="relative flex items-center justify-center">
-                  <div class="absolute w-72 h-72 rounded-full bg-gradient-to-tr from-purple-700/40 via-fuchsia-500/30 to-pink-500/25 blur-3xl pointer-events-none"></div>
-                  <img id="fullCover" src="" oncontextmenu="openActionSheet(currentTrackIndex); return false;" class="relative z-10 w-72 h-72 sm:w-80 sm:h-80 cover-2027 object-cover bg-purple-950/50" />
-                </div>
-                <div class="mt-5 px-4 py-1.5 rounded-full glass-pill flex items-center gap-2.5 text-[10px] text-fuchsia-200 font-mono">
-                  <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
-                  <span>MOTOR NATIVO DIRECTO • 24-BIT / BLUETOOTH LOCK</span>
+              <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;margin:16px 0;">
+                <img id="fullCover" src="" oncontextmenu="openActionSheet(currentTrackIndex);return false;" class="cover-lg" />
+                <div class="pill" style="margin-top:16px;padding:5px 14px;font-size:10px;font-family:monospace;color:#f0abfc;display:flex;align-items:center;gap:7px;">
+                  <span style="width:8px;height:8px;border-radius:50%;background:#34d399;display:inline-block;"></span>
+                  <span>DEDICATED AUDIO THREAD • BLUETOOTH LOCK</span>
                 </div>
               </div>
 
-              <div class="space-y-4 pt-1 relative z-10">
-                <div class="flex items-center justify-between gap-2">
-                  <div class="min-w-0 flex-1">
-                    <h2 id="fullTitle" class="text-xl sm:text-2xl font-extrabold text-white truncate">Sin canción</h2>
-                    <p id="fullArtist" class="text-sm text-fuchsia-200/85 truncate mt-0.5">--</p>
+              <div style="display:flex;flex-direction:column;gap:14px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+                  <div style="min-width:0;flex:1;">
+                    <div id="fullTitle" class="truncate" style="font-size:20px;font-weight:800;color:#fff;">Sin canción</div>
+                    <div id="fullArtist" class="truncate" style="font-size:13px;color:#f0abfc;margin-top:3px;">--</div>
                   </div>
-                  <div class="flex items-center gap-1.5 shrink-0">
-                    <button onclick="toggleLikeCurrent()" id="fullLikeBtn" class="w-10 h-10 rounded-full glass-pill flex items-center justify-center text-purple-200 active:scale-90"><i class="fa-regular fa-heart text-base"></i></button>
-                    <button onclick="openAddToPlaylistModal(currentTrackIndex)" class="w-10 h-10 rounded-full glass-pill flex items-center justify-center text-purple-200 active:scale-90"><i class="fa-solid fa-folder-plus text-sm text-fuchsia-300"></i></button>
-                    <button onclick="shareTrack(currentTrackIndex)" class="w-10 h-10 rounded-full glass-pill flex items-center justify-center text-purple-200 active:scale-90"><i class="fa-solid fa-share-nodes text-sm text-fuchsia-300"></i></button>
-                    <button onclick="openModal('eqModal')" id="fullGenreBadge" class="px-3.5 py-2 rounded-full text-[10px] glass-pill text-fuchsia-200 font-mono font-bold">EQ: Space Rock</button>
+                  <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+                    <button onclick="toggleLikeCurrent()" id="fullLikeBtn" class="pill" style="width:38px;height:38px;font-size:16px;">♡</button>
+                    <button onclick="openAddToPlaylistModal(currentTrackIndex)" class="pill" style="width:38px;height:38px;font-size:14px;">➕</button>
+                    <button onclick="shareTrack(currentTrackIndex)" class="pill" style="width:38px;height:38px;font-size:14px;">📤</button>
+                    <button onclick="openModal('eqModal')" id="fullGenreBadge" class="pill" style="padding:8px 12px;font-size:10px;font-family:monospace;font-weight:700;color:#f0abfc;">EQ: Space Rock</button>
                   </div>
                 </div>
 
                 <div>
-                  <input type="range" id="fullSeek" value="0" min="0" max="100" step="0.1" oninput="onSeekDrag(this.value)" onchange="onSeekCommit(this.value)" class="w-full" />
-                  <div class="flex justify-between text-xs text-purple-300/80 mt-1.5 font-mono">
+                  <input type="range" id="fullSeek" value="0" min="0" max="100" step="0.1" oninput="onSeekDrag(this.value)" onchange="onSeekCommit(this.value)" />
+                  <div style="display:flex;justify-content:space-between;font-size:11px;font-family:monospace;color:#d8b4fe;margin-top:6px;">
                     <span id="fullCurrentTime">0:00</span>
                     <span id="fullDuration">0:00</span>
                   </div>
                 </div>
 
-                <div class="flex items-center justify-between px-1 pt-1">
-                  <button onclick="toggleShuffle()" id="shuffleBtn" class="w-9 h-9 rounded-full flex items-center justify-center text-purple-400/50 active:scale-90"><i class="fa-solid fa-shuffle text-sm"></i></button>
-                  <button onclick="seekDelta(-10000)" class="px-2.5 py-1.5 rounded-full glass-pill text-[11px] font-mono font-bold text-purple-200 active:scale-90">-10s</button>
-                  <button onclick="prevTrack()" class="w-12 h-12 rounded-full glass-pill flex items-center justify-center text-white text-lg active:scale-90"><i class="fa-solid fa-backward-step"></i></button>
-                  <button onclick="togglePlay()" id="fullPlayBtn" class="w-16 h-16 rounded-full bg-gradient-to-tr from-purple-600 via-fuchsia-500 to-pink-500 text-white flex items-center justify-center text-2xl shadow-[0_0_28px_rgba(217,70,239,0.65)] active:scale-95"><i class="fa-solid fa-play"></i></button>
-                  <button onclick="nextTrack()" class="w-12 h-12 rounded-full glass-pill flex items-center justify-center text-white text-lg active:scale-90"><i class="fa-solid fa-forward-step"></i></button>
-                  <button onclick="seekDelta(10000)" class="px-2.5 py-1.5 rounded-full glass-pill text-[11px] font-mono font-bold text-purple-200 active:scale-90">+10s</button>
-                  <button onclick="cycleRepeat()" id="repeatBtn" class="w-9 h-9 rounded-full flex items-center justify-center text-purple-400/50 relative active:scale-90"><i class="fa-solid fa-repeat text-sm"></i><span id="repeatOneBadge" class="hidden absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full bg-fuchsia-400 text-[10px] font-bold text-black flex items-center justify-center">1</span></button>
+                <div style="display:flex;align-items:center;justify-content:space-between;padding-top:4px;">
+                  <button onclick="toggleShuffle()" id="shuffleBtn" style="width:36px;height:36px;font-size:15px;opacity:0.45;">🔀</button>
+                  <button onclick="seekDelta(-10000)" class="pill" style="padding:7px 11px;font-size:11px;font-family:monospace;font-weight:700;">-10s</button>
+                  <button onclick="prevTrack()" class="pill" style="width:46px;height:46px;font-size:18px;">⏮</button>
+                  <button onclick="togglePlay()" id="fullPlayBtn" class="btn-grad" style="width:64px;height:64px;font-size:24px;display:flex;align-items:center;justify-content:center;">▶</button>
+                  <button onclick="nextTrack()" class="pill" style="width:46px;height:46px;font-size:18px;">⏭</button>
+                  <button onclick="seekDelta(10000)" class="pill" style="padding:7px 11px;font-size:11px;font-family:monospace;font-weight:700;">+10s</button>
+                  <button onclick="cycleRepeat()" id="repeatBtn" style="width:36px;height:36px;font-size:15px;opacity:0.45;">🔁</button>
                 </div>
               </div>
             </div>
 
-            <div id="actionSheetModal" class="fixed inset-0 z-[70] bg-black/80 hidden items-end justify-center" onclick="if(event.target===this) closeModal('actionSheetModal')">
-              <div class="card-2027 w-full max-w-md rounded-t-3xl p-5 space-y-4 border-t border-fuchsia-400/40 pb-8">
-                <div class="w-12 h-1.5 bg-purple-400/30 rounded-full mx-auto"></div>
-                <div class="flex items-center gap-3.5 pb-3 border-b border-purple-800/40">
-                  <img id="sheetTrackCover" src="" class="w-14 h-14 cover-row object-cover shrink-0" />
-                  <div class="min-w-0 flex-1"><h4 id="sheetTrackTitle" class="text-sm font-bold text-white truncate">Canción</h4><p id="sheetTrackArtist" class="text-xs text-fuchsia-300/80 truncate">Artista</p></div>
-                </div>
-                <div class="space-y-2 text-xs font-semibold">
-                  <button onclick="sheetToggleLike()" class="w-full p-3.5 rounded-2xl glass-pill flex items-center gap-3.5 text-left text-purple-100"><i id="sheetLikeIcon" class="fa-regular fa-heart text-pink-400 text-base w-5 text-center"></i><span id="sheetLikeText">Añadir a Tus Me Gusta</span></button>
-                  <button onclick="sheetAddToPlaylist()" class="w-full p-3.5 rounded-2xl glass-pill flex items-center gap-3.5 text-left text-purple-100"><i class="fa-solid fa-list-ul text-fuchsia-400 text-base w-5 text-center"></i><span>Añadir a una Playlist...</span></button>
-                  <button onclick="sheetShareTrack()" class="w-full p-3.5 rounded-2xl glass-pill flex items-center gap-3.5 text-left text-purple-100"><i class="fa-solid fa-share-nodes text-purple-400 text-base w-5 text-center"></i><span>Compartir canción (WhatsApp, Bluetooth, etc.)</span></button>
-                  <button onclick="sheetEditTrack()" class="w-full p-3.5 rounded-2xl glass-pill flex items-center gap-3.5 text-left text-purple-100"><i class="fa-solid fa-pen-to-square text-fuchsia-300 text-base w-5 text-center"></i><span>Editar nombre, artista o portada</span></button>
-                </div>
-              </div>
-            </div>
-
-            <div id="addToPlaylistModal" class="fixed inset-0 z-[75] bg-black/80 hidden items-center justify-center p-4">
-              <div class="card-2027 rounded-3xl w-full max-w-md p-5 space-y-4">
-                <div class="flex justify-between items-center border-b border-purple-800/40 pb-2.5"><h3 class="font-bold text-sm text-white">Añadir a Playlist</h3><button onclick="closeModal('addToPlaylistModal')" class="text-purple-300"><i class="fa-solid fa-xmark"></i></button></div>
-                <button onclick="closeModal('addToPlaylistModal'); openCreatePlaylistModal(true);" class="w-full p-3 rounded-2xl bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-lg"><i class="fa-solid fa-plus"></i> Crear Nueva Playlist</button>
-                <div id="playlistSelectorList" class="space-y-2 max-h-60 overflow-y-auto"></div>
-              </div>
-            </div>
-
-            <div id="createPlaylistModal" class="fixed inset-0 z-[80] bg-black/80 hidden items-center justify-center p-4">
-              <div class="card-2027 rounded-3xl w-full max-w-sm p-5 space-y-4">
-                <div class="flex justify-between items-center border-b border-purple-800/40 pb-2"><h3 class="font-bold text-sm text-white">Nueva Playlist</h3><button onclick="closeModal('createPlaylistModal')" class="text-purple-300"><i class="fa-solid fa-xmark"></i></button></div>
-                <div><label class="text-xs text-purple-300/80 block mb-1.5">Nombre de tu Playlist</label><input type="text" id="newPlaylistNameInput" placeholder="Ej. Noche Gótica, Gym, Ruta Cupra..." class="w-full p-3 rounded-2xl bg-purple-950 border border-purple-600/50 text-sm text-white focus:outline-none focus:border-fuchsia-400" /></div>
-                <div class="flex justify-end gap-2 pt-1"><button onclick="closeModal('createPlaylistModal')" class="px-4 py-2 rounded-full glass-pill text-purple-300 text-xs">Cancelar</button><button onclick="confirmCreatePlaylist()" class="px-5 py-2 rounded-full bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white text-xs font-bold shadow-md">Crear</button></div>
-              </div>
-            </div>
-
-            <div id="editModal" class="fixed inset-0 z-[75] bg-black/85 hidden items-center justify-center p-4">
-              <div class="card-2027 rounded-3xl w-full max-w-md p-5 space-y-3.5">
-                <div class="flex justify-between items-center border-b border-purple-800/40 pb-2"><h3 class="font-bold text-sm text-purple-100">Modificar Información y Portada</h3><button onclick="closeModal('editModal')" class="text-purple-400"><i class="fa-solid fa-xmark"></i></button></div>
-                <div class="space-y-3 text-xs">
-                  <div><label class="text-purple-300/80 block mb-1">Nombre</label><input type="text" id="editTitle" class="w-full p-2.5 rounded-2xl bg-purple-950 border border-purple-700/50 text-white" /></div>
-                  <div class="grid grid-cols-2 gap-2">
-                    <div><label class="text-purple-300/80 block mb-1">Artista</label><input type="text" id="editArtist" class="w-full p-2.5 rounded-2xl bg-purple-950 border border-purple-700/50 text-white" /></div>
-                    <div><label class="text-purple-300/80 block mb-1">Álbum</label><input type="text" id="editAlbum" class="w-full p-2.5 rounded-2xl bg-purple-950 border border-purple-700/50 text-white" /></div>
+            <!-- MENU CONTEXTUAL (MANTENER PRESIONADO) -->
+            <div id="actionSheetModal" class="modal-overlay" onclick="if(event.target===this) closeModal('actionSheetModal')">
+              <div class="modal-box" style="display:flex;flex-direction:column;gap:10px;">
+                <div style="display:flex;align-items:center;gap:12px;padding-bottom:10px;border-bottom:1px solid rgba(192,132,252,0.2);">
+                  <img id="sheetTrackCover" src="" class="cover-sm" />
+                  <div style="min-width:0;flex:1;">
+                    <div id="sheetTrackTitle" class="truncate" style="font-size:14px;font-weight:700;color:#fff;">Canción</div>
+                    <div id="sheetTrackArtist" class="truncate" style="font-size:12px;color:#f0abfc;">Artista</div>
                   </div>
-                  <div><label class="text-purple-300/80 block mb-1">Cambiar Portada</label><input type="file" id="editCoverFile" accept="image/*" class="w-full text-[11px] text-purple-300 file:mr-2 file:py-1.5 file:px-3 file:rounded-full file:border-0 file:bg-purple-700 file:text-white" /></div>
                 </div>
-                <div class="flex justify-end gap-2 pt-2"><button onclick="closeModal('editModal')" class="px-4 py-2 rounded-full glass-pill text-purple-300 text-xs">Cancelar</button><button onclick="saveTrackEdits()" class="px-5 py-2 rounded-full bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white text-xs font-bold">Guardar</button></div>
+                <button onclick="sheetToggleLike()" class="pill" style="padding:12px 14px;text-align:left;font-size:13px;font-weight:600;" id="sheetLikeText">❤️ Añadir a Tus Me Gusta</button>
+                <button onclick="sheetAddToPlaylist()" class="pill" style="padding:12px 14px;text-align:left;font-size:13px;font-weight:600;">➕ Añadir a una Playlist...</button>
+                <button onclick="sheetShareTrack()" class="pill" style="padding:12px 14px;text-align:left;font-size:13px;font-weight:600;">📤 Compartir archivo de audio</button>
+                <button onclick="sheetEditTrack()" class="pill" style="padding:12px 14px;text-align:left;font-size:13px;font-weight:600;">✏️ Editar nombre, artista o portada</button>
+                <button onclick="closeModal('actionSheetModal')" style="padding:8px;font-size:12px;color:#d8b4fe;margin-top:4px;">Cerrar</button>
               </div>
             </div>
 
-            <div id="eqModal" class="fixed inset-0 z-[75] bg-black/85 hidden items-center justify-center p-4">
-              <div class="card-2027 rounded-3xl w-full max-w-md p-5 space-y-4 max-h-[90vh] overflow-y-auto">
-                <div class="flex justify-between items-center border-b border-purple-800/40 pb-2"><h3 class="font-bold text-sm text-purple-100">Ecualizador Hardware Nativo (16 Géneros)</h3><button onclick="closeModal('eqModal')" class="text-purple-400"><i class="fa-solid fa-xmark"></i></button></div>
-                <div id="eqPresetContainer" class="grid grid-cols-4 gap-1.5"></div>
-                <div class="space-y-3 pt-2 border-t border-purple-900/50">
-                  <div class="flex items-center gap-3"><span class="text-xs text-fuchsia-300 w-16 font-mono font-bold">60 Hz</span><input type="range" id="eq-0" min="-12" max="12" value="5" oninput="updateEqBand(0, this.value)" class="flex-1" /><span id="eq-val-0" class="text-xs text-purple-200 w-10 text-right font-mono">+5dB</span></div>
-                  <div class="flex items-center gap-3"><span class="text-xs text-purple-300 w-16 font-mono">230 Hz</span><input type="range" id="eq-1" min="-12" max="12" value="2" oninput="updateEqBand(1, this.value)" class="flex-1" /><span id="eq-val-1" class="text-xs text-purple-200 w-10 text-right font-mono">+2dB</span></div>
-                  <div class="flex items-center gap-3"><span class="text-xs text-purple-300 w-16 font-mono">910 Hz</span><input type="range" id="eq-2" min="-12" max="12" value="0" oninput="updateEqBand(2, this.value)" class="flex-1" /><span id="eq-val-2" class="text-xs text-purple-200 w-10 text-right font-mono">0dB</span></div>
-                  <div class="flex items-center gap-3"><span class="text-xs text-purple-300 w-16 font-mono">3.6 kHz</span><input type="range" id="eq-3" min="-12" max="12" value="4" oninput="updateEqBand(3, this.value)" class="flex-1" /><span id="eq-val-3" class="text-xs text-purple-200 w-10 text-right font-mono">+4dB</span></div>
-                  <div class="flex items-center gap-3"><span class="text-xs text-fuchsia-300 w-16 font-mono font-bold">14 kHz</span><input type="range" id="eq-4" min="-12" max="12" value="6" oninput="updateEqBand(4, this.value)" class="flex-1" /><span id="eq-val-4" class="text-xs text-purple-200 w-10 text-right font-mono">+6dB</span></div>
+            <!-- MODAL AÑADIR A PLAYLIST -->
+            <div id="addToPlaylistModal" class="modal-overlay">
+              <div class="modal-box" style="display:flex;flex-direction:column;gap:12px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                  <b style="font-size:14px;">Añadir a Playlist</b>
+                  <button onclick="closeModal('addToPlaylistModal')">✕</button>
+                </div>
+                <button onclick="closeModal('addToPlaylistModal');openCreatePlaylistModal(true);" class="btn-grad" style="padding:11px;font-size:12px;">+ Crear Nueva Playlist</button>
+                <div id="playlistSelectorList" style="display:flex;flex-direction:column;gap:8px;max-height:220px;overflow-y:auto;"></div>
+              </div>
+            </div>
+
+            <!-- MODAL CREAR PLAYLIST -->
+            <div id="createPlaylistModal" class="modal-overlay">
+              <div class="modal-box" style="display:flex;flex-direction:column;gap:12px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                  <b style="font-size:14px;">Nueva Playlist</b>
+                  <button onclick="closeModal('createPlaylistModal')">✕</button>
+                </div>
+                <input type="text" id="newPlaylistNameInput" placeholder="Nombre de la playlist..." class="search-input" style="padding-left:14px;" />
+                <div style="display:flex;justify-content:flex-end;gap:8px;">
+                  <button onclick="closeModal('createPlaylistModal')" class="pill" style="padding:8px 16px;font-size:12px;">Cancelar</button>
+                  <button onclick="confirmCreatePlaylist()" class="btn-grad" style="padding:8px 18px;font-size:12px;">Crear</button>
                 </div>
               </div>
             </div>
 
-            <div id="timerModal" class="fixed inset-0 z-[75] bg-black/85 hidden items-center justify-center p-4">
-              <div class="card-2027 rounded-3xl w-full max-w-sm p-5 space-y-3 text-center">
-                <div class="flex justify-between items-center border-b border-purple-800/40 pb-2"><h3 class="font-bold text-sm text-purple-100">Temporizador de Apagado</h3><button onclick="closeModal('timerModal')" class="text-purple-400"><i class="fa-solid fa-xmark"></i></button></div>
-                <div class="grid grid-cols-3 gap-2 pt-2">
-                  <button onclick="setSleepTimer(10)" class="p-2.5 rounded-2xl glass-pill text-xs font-semibold">10 Min</button>
-                  <button onclick="setSleepTimer(20)" class="p-2.5 rounded-2xl glass-pill text-xs font-semibold">20 Min</button>
-                  <button onclick="setSleepTimer(45)" class="p-2.5 rounded-2xl glass-pill text-xs font-semibold">45 Min</button>
+            <!-- MODAL EDITAR CANCION -->
+            <div id="editModal" class="modal-overlay">
+              <div class="modal-box" style="display:flex;flex-direction:column;gap:10px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                  <b style="font-size:14px;">Editar Pista</b>
+                  <button onclick="closeModal('editModal')">✕</button>
                 </div>
-                <button onclick="setSleepTimer(0)" class="w-full p-2.5 rounded-2xl bg-red-950/60 border border-red-700/40 text-xs text-red-300 font-semibold mt-2">Desactivar</button>
+                <input type="text" id="editTitle" placeholder="Título" class="search-input" style="padding-left:14px;" />
+                <input type="text" id="editArtist" placeholder="Artista" class="search-input" style="padding-left:14px;" />
+                <input type="text" id="editAlbum" placeholder="Álbum" class="search-input" style="padding-left:14px;" />
+                <input type="file" id="editCoverFile" accept="image/*" style="font-size:11px;color:#d8b4fe;" />
+                <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px;">
+                  <button onclick="closeModal('editModal')" class="pill" style="padding:8px 16px;font-size:12px;">Cancelar</button>
+                  <button onclick="saveTrackEdits()" class="btn-grad" style="padding:8px 18px;font-size:12px;">Guardar</button>
+                </div>
               </div>
             </div>
 
-            <div id="cosmosToast" class="fixed top-20 left-1/2 -translate-x-1/2 z-[90] px-4 py-2 rounded-full bg-gradient-to-r from-purple-700 to-fuchsia-600 text-white text-xs font-bold shadow-lg opacity-0 pointer-events-none transition-opacity duration-200">Listo</div>
+            <!-- MODAL ECUALIZADOR -->
+            <div id="eqModal" class="modal-overlay">
+              <div class="modal-box" style="display:flex;flex-direction:column;gap:12px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                  <b style="font-size:14px;">Ecualizador Hardware (16 Géneros)</b>
+                  <button onclick="closeModal('eqModal')">✕</button>
+                </div>
+                <div id="eqPresetContainer" style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;"></div>
+                <div style="display:flex;flex-direction:column;gap:10px;margin-top:6px;">
+                  <div style="display:flex;align-items:center;gap:8px;font-size:11px;font-family:monospace;"><span style="width:52px;">60 Hz</span><input type="range" id="eq-0" min="-12" max="12" value="5" oninput="updateEqBand(0,this.value)" /><span id="eq-val-0" style="width:38px;text-align:right;">+5dB</span></div>
+                  <div style="display:flex;align-items:center;gap:8px;font-size:11px;font-family:monospace;"><span style="width:52px;">230 Hz</span><input type="range" id="eq-1" min="-12" max="12" value="2" oninput="updateEqBand(1,this.value)" /><span id="eq-val-1" style="width:38px;text-align:right;">+2dB</span></div>
+                  <div style="display:flex;align-items:center;gap:8px;font-size:11px;font-family:monospace;"><span style="width:52px;">910 Hz</span><input type="range" id="eq-2" min="-12" max="12" value="0" oninput="updateEqBand(2,this.value)" /><span id="eq-val-2" style="width:38px;text-align:right;">0dB</span></div>
+                  <div style="display:flex;align-items:center;gap:8px;font-size:11px;font-family:monospace;"><span style="width:52px;">3.6 kHz</span><input type="range" id="eq-3" min="-12" max="12" value="4" oninput="updateEqBand(3,this.value)" /><span id="eq-val-3" style="width:38px;text-align:right;">+4dB</span></div>
+                  <div style="display:flex;align-items:center;gap:8px;font-size:11px;font-family:monospace;"><span style="width:52px;">14 kHz</span><input type="range" id="eq-4" min="-12" max="12" value="6" oninput="updateEqBand(4,this.value)" /><span id="eq-val-4" style="width:38px;text-align:right;">+6dB</span></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- MODAL TEMPORIZADOR -->
+            <div id="timerModal" class="modal-overlay">
+              <div class="modal-box" style="display:flex;flex-direction:column;gap:12px;text-align:center;">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                  <b style="font-size:14px;">Temporizador</b>
+                  <button onclick="closeModal('timerModal')">✕</button>
+                </div>
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;">
+                  <button onclick="setSleepTimer(10)" class="pill" style="padding:10px;font-size:12px;">10 Min</button>
+                  <button onclick="setSleepTimer(20)" class="pill" style="padding:10px;font-size:12px;">20 Min</button>
+                  <button onclick="setSleepTimer(45)" class="pill" style="padding:10px;font-size:12px;">45 Min</button>
+                </div>
+                <button onclick="setSleepTimer(0)" class="pill" style="padding:10px;font-size:12px;color:#fda4af;">Desactivar</button>
+              </div>
+            </div>
+
+            <div id="cosmosToast" class="toast">Listo</div>
 
             <script>
-              window.defaultLogoDataUri = "data:image/svg+xml;utf8," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300"><rect width="300" height="300" fill="#06020d"/><circle cx="150" cy="150" r="110" fill="none" stroke="#a855f7" stroke-width="3" opacity="0.5"/><path d="M80 138 A72 72 0 0 1 220 138" fill="none" stroke="#f0abfc" stroke-width="6" stroke-linecap="round"/><polygon points="150,55 88,168 122,168 150,108" fill="#f5d0fe"/><polygon points="150,55 212,168 178,168 150,108" fill="#a855f7"/><polygon points="124,162 150,235 176,162 150,184" fill="#c084fc"/><polygon points="150,122 162,146 150,170 138,146" fill="#ffffff"/></svg>`);
+              window.defaultLogoDataUri = "data:image/svg+xml;utf8," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300"><rect width="300" height="300" fill="#06020d"/><polygon points="150,55 88,168 122,168 150,108" fill="#f5d0fe"/><polygon points="150,55 212,168 178,168 150,108" fill="#a855f7"/><polygon points="124,162 150,235 176,162 150,184" fill="#c084fc"/></svg>`);
               document.getElementById("headerLogoImg").onerror = function() { this.src = window.defaultLogoDataUri; };
 
               let tracks = [];
               let customOverrides = JSON.parse(localStorage.getItem("cosmos_overrides_2027")) || {};
               let likedTrackIds = JSON.parse(localStorage.getItem("cosmos_likes_2027")) || [];
-              let userPlaylists = JSON.parse(localStorage.getItem("cosmos_playlists_2027")) || [{ id: "pl_default_1", name: "Sesión Nocturna ✨", tracks: [] }];
+              let userPlaylists = JSON.parse(localStorage.getItem("cosmos_playlists_2027")) || [{ id: "pl_1", name: "Sesión Nocturna ✨", tracks: [] }];
 
               let currentTab = "songs", currentTrackIndex = -1, actionSheetTrackIdx = -1, pendingAddTrackIdx = -1, activePlaylistViewId = null;
               let isPlaying = false, isDraggingSeek = false, currentDurationSec = 0, shuffleMode = false, repeatMode = 0;
               let activePresetName = "Space Rock", sleepTimerId = null;
 
               const eqPresets = {
-                "Space Rock": [5, 2, 0, 4, 6], "Gothic Rock": [6, 4, -1, 3, 5], "Love Metal": [6, 3, -1, 5, 6], "Symphonic": [5, 2, 1, 5, 7],
-                "Metal": [7, 3, -3, 5, 7], "Rock": [5, 3, -1, 4, 5], "Pop": [2, 3, 4, 3, 3], "Acoustic": [3, 2, 1, 4, 5],
-                "Bass Boost": [9, 6, 0, 1, 2], "Vocal": [-2, 1, 6, 5, 2], "Synthwave": [7, 4, -1, 3, 6], "Salsa": [4, 3, 3, 4, 5],
-                "Cumbia": [7, 5, 1, 3, 4], "Jazz": [4, 2, -1, 3, 4], "Classical": [3, 1, 0, 3, 5], "Plano": [0, 0, 0, 0, 0]
+                "Space Rock": [5,2,0,4,6], "Gothic Rock": [6,4,-1,3,5], "Love Metal": [6,3,-1,5,6], "Symphonic": [5,2,1,5,7],
+                "Metal": [7,3,-3,5,7], "Rock": [5,3,-1,4,5], "Pop": [2,3,4,3,3], "Acoustic": [3,2,1,4,5],
+                "Bass Boost": [9,6,0,1,2], "Vocal": [-2,1,6,5,2], "Synthwave": [7,4,-1,3,6], "Salsa": [4,3,3,4,5],
+                "Cumbia": [7,5,1,3,4], "Jazz": [4,2,-1,3,4], "Classical": [3,1,0,3,5], "Plano": [0,0,0,0,0]
               };
 
               function showToast(msg) {
                 const t = document.getElementById("cosmosToast");
                 t.textContent = msg; t.style.opacity = "1";
-                setTimeout(() => { t.style.opacity = "0"; }, 2000);
+                setTimeout(() => { t.style.opacity = "0"; }, 1800);
               }
 
               function updateBentoCounters() {
@@ -1094,16 +1315,14 @@ jobs:
               }
 
               function renderEqButtons() {
-                const container = document.getElementById("eqPresetContainer");
-                container.innerHTML = "";
+                const c = document.getElementById("eqPresetContainer"); c.innerHTML = "";
                 Object.keys(eqPresets).forEach(name => {
-                  const btn = document.createElement("button");
-                  btn.className = name === activePresetName
-                    ? "px-2 py-1.5 rounded-xl text-[10px] font-bold bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white border border-fuchsia-300 truncate"
-                    : "px-2 py-1.5 rounded-xl text-[10px] glass-pill text-purple-300 truncate";
-                  btn.textContent = name;
-                  btn.onclick = () => applyEqPreset(name);
-                  container.appendChild(btn);
+                  const b = document.createElement("button");
+                  b.className = name === activePresetName ? "btn-grad truncate" : "pill truncate";
+                  b.style.cssText = "padding:7px 4px;font-size:10px;";
+                  b.textContent = name;
+                  b.onclick = () => applyEqPreset(name);
+                  c.appendChild(b);
                 });
               }
 
@@ -1153,22 +1372,19 @@ jobs:
               };
 
               function rescanPhoneLibrary() { if(window.CosmosNative) window.CosmosNative.rescanMediaStore(); }
-              function isTrackLiked(trackId) { return likedTrackIds.includes(trackId); }
+              function isTrackLiked(id) { return likedTrackIds.includes(id); }
 
               function toggleLikeByIdx(idx, ev) {
                 if (ev) ev.stopPropagation();
                 const t = tracks[idx]; if (!t) return;
                 const pos = likedTrackIds.indexOf(t.id);
                 const nowLiked = pos === -1;
-                if (pos >= 0) { likedTrackIds.splice(pos, 1); showToast("Quitado de Tus Me Gusta"); }
-                else { likedTrackIds.push(t.id); showToast("❤️ Añadido a Tus Me Gusta"); }
+                if (pos >= 0) { likedTrackIds.splice(pos, 1); showToast("Quitado de Me Gusta"); }
+                else { likedTrackIds.push(t.id); showToast("❤️ Añadido a Me Gusta"); }
                 localStorage.setItem("cosmos_likes_2027", JSON.stringify(likedTrackIds));
                 updateLikeButtonsUI(); updateBentoCounters();
-                const rowHeartBtn = document.getElementById(`row-like-btn-${idx}`);
-                if (rowHeartBtn) {
-                  rowHeartBtn.className = `w-8 h-8 rounded-full flex items-center justify-center ${nowLiked ? 'text-pink-500' : 'text-purple-300/50'}`;
-                  rowHeartBtn.innerHTML = `<i class="${nowLiked ? 'fa-solid' : 'fa-regular'} fa-heart text-xs"></i>`;
-                }
+                const btn = document.getElementById(`row-like-btn-${idx}`);
+                if (btn) btn.textContent = nowLiked ? "❤️" : "♡";
                 if (currentTab === "favorites") renderLibrary();
               }
 
@@ -1176,23 +1392,19 @@ jobs:
 
               function updateLikeButtonsUI() {
                 if (currentTrackIndex < 0 || !tracks[currentTrackIndex]) return;
-                const liked = isTrackLiked(tracks[currentTrackIndex].id);
-                const html = liked ? '<i class="fa-solid fa-heart text-pink-500"></i>' : '<i class="fa-regular fa-heart"></i>';
-                document.getElementById("miniLikeBtn").innerHTML = html;
-                document.getElementById("fullLikeBtn").innerHTML = html;
+                const sym = isTrackLiked(tracks[currentTrackIndex].id) ? "❤️" : "♡";
+                document.getElementById("miniLikeBtn").textContent = sym;
+                document.getElementById("fullLikeBtn").textContent = sym;
               }
 
               function openActionSheet(idx) {
                 if (idx < 0 || !tracks[idx]) return;
                 actionSheetTrackIdx = idx;
                 const t = tracks[idx];
-                if (navigator.vibrate) navigator.vibrate(20);
                 setImageWithFallback(document.getElementById("sheetTrackCover"), t.thumb);
                 document.getElementById("sheetTrackTitle").textContent = t.title;
                 document.getElementById("sheetTrackArtist").textContent = `${t.artist} • ${t.album}`;
-                const liked = isTrackLiked(t.id);
-                document.getElementById("sheetLikeIcon").className = liked ? "fa-solid fa-heart text-pink-500 text-base w-5 text-center" : "fa-regular fa-heart text-pink-400 text-base w-5 text-center";
-                document.getElementById("sheetLikeText").textContent = liked ? "Quitar de Tus Me Gusta" : "Añadir a Tus Me Gusta ❤️";
+                document.getElementById("sheetLikeText").textContent = isTrackLiked(t.id) ? "💔 Quitar de Tus Me Gusta" : "❤️ Añadir a Tus Me Gusta";
                 openModal("actionSheetModal");
               }
 
@@ -1218,7 +1430,7 @@ jobs:
                 const newPl = { id: "pl_" + Date.now(), name: name, tracks: [] };
                 if (pendingAddTrackIdx >= 0 && tracks[pendingAddTrackIdx]) {
                   newPl.tracks.push(tracks[pendingAddTrackIdx].id);
-                  showToast(`✨ Creada y añadida a "${name}"`);
+                  showToast(`✨ Añadida a "${name}"`);
                 } else showToast(`✨ Playlist "${name}" creada`);
                 userPlaylists.push(newPl);
                 localStorage.setItem("cosmos_playlists_2027", JSON.stringify(userPlaylists));
@@ -1237,14 +1449,15 @@ jobs:
                 userPlaylists.forEach(pl => {
                   const alreadyIn = pl.tracks.includes(trackId);
                   const btn = document.createElement("button");
-                  btn.className = "w-full p-3 rounded-2xl glass-pill flex items-center justify-between text-left";
-                  btn.innerHTML = `<div class="flex items-center gap-3 min-w-0"><div class="w-9 h-9 rounded-xl bg-purple-900/80 border border-fuchsia-400/30 flex items-center justify-center text-fuchsia-300 shrink-0"><i class="fa-solid fa-music text-xs"></i></div><div class="min-w-0"><div class="text-xs font-bold text-white truncate">${pl.name}</div><div class="text-[10px] text-purple-300/70">${pl.tracks.length} canciones</div></div></div><span class="text-xs font-bold ${alreadyIn ? 'text-fuchsia-400' : 'text-purple-300'}">${alreadyIn ? '✓ Añadida' : '+ Añadir'}</span>`;
+                  btn.className = "pill";
+                  btn.style.cssText = "padding:12px 14px;display:flex;justify-content:space-between;align-items:center;font-size:12px;";
+                  btn.innerHTML = `<span class="truncate">🎵 <b>${pl.name}</b> (${pl.tracks.length})</span><span style="color:#f0abfc;font-weight:700;">${alreadyIn ? '✓' : '+ Añadir'}</span>`;
                   btn.onclick = () => {
                     if (!alreadyIn) {
                       pl.tracks.push(trackId);
                       localStorage.setItem("cosmos_playlists_2027", JSON.stringify(userPlaylists));
                       showToast(`🎵 Añadida a "${pl.name}"`);
-                    } else showToast(`Ya estaba en "${pl.name}"`);
+                    }
                     closeModal("addToPlaylistModal");
                     if (currentTab === "playlists") renderLibrary();
                   };
@@ -1265,13 +1478,13 @@ jobs:
                 const pl = userPlaylists.find(p => p.id === plId); if (!pl) return;
                 pl.tracks = pl.tracks.filter(id => id !== trackId);
                 localStorage.setItem("cosmos_playlists_2027", JSON.stringify(userPlaylists));
-                renderLibrary(); showToast("Quitada de la playlist");
+                renderLibrary(); showToast("Quitada de la lista");
               }
 
               function playRandomMix() {
                 if (!tracks.length) return;
                 shuffleMode = true;
-                document.getElementById("shuffleBtn").className = "w-9 h-9 rounded-full flex items-center justify-center text-fuchsia-400";
+                document.getElementById("shuffleBtn").style.opacity = "1";
                 if (window.CosmosNative) window.CosmosNative.setShuffleAndRepeat(shuffleMode, repeatMode);
                 loadTrack(Math.floor(Math.random() * tracks.length), true);
                 showToast("🔀 Mix Cosmos Activado");
@@ -1282,10 +1495,8 @@ jobs:
                 activePresetName = name;
                 document.getElementById("fullGenreBadge").textContent = `EQ: ${name}`;
                 gains.forEach((val, idx) => {
-                  const slider = document.getElementById(`eq-${idx}`);
-                  if (slider) slider.value = val;
-                  const valLabel = document.getElementById(`eq-val-${idx}`);
-                  if (valLabel) valLabel.textContent = (val > 0 ? "+" : "") + val + "dB";
+                  const s = document.getElementById(`eq-${idx}`); if (s) s.value = val;
+                  const l = document.getElementById(`eq-val-${idx}`); if (l) l.textContent = (val > 0 ? "+" : "") + val + "dB";
                 });
                 if (window.CosmosNative) window.CosmosNative.setEqPresetGains(gains[0], gains[1], gains[2], gains[3], gains[4]);
                 renderEqButtons();
@@ -1293,8 +1504,7 @@ jobs:
 
               function updateEqBand(index, val) {
                 const dbVal = parseInt(val, 10) || 0;
-                const valLabel = document.getElementById(`eq-val-${index}`);
-                if (valLabel) valLabel.textContent = (dbVal > 0 ? "+" : "") + dbVal + "dB";
+                const l = document.getElementById(`eq-val-${index}`); if (l) l.textContent = (dbVal > 0 ? "+" : "") + dbVal + "dB";
                 if (window.CosmosNative) window.CosmosNative.setEqBand(index, dbVal);
               }
 
@@ -1309,22 +1519,16 @@ jobs:
               function highlightActiveRow(prevIdx, newIdx) {
                 if (prevIdx >= 0) {
                   const oldRow = document.getElementById(`song-row-${prevIdx}`);
-                  const oldTitle = document.getElementById(`song-title-${prevIdx}`);
-                  if (oldRow) oldRow.classList.remove("song-row-active");
-                  if (oldTitle) { oldTitle.classList.remove("text-fuchsia-300"); oldTitle.classList.add("text-white"); }
+                  if (oldRow) oldRow.classList.remove("active");
                 }
                 if (newIdx >= 0) {
                   const newRow = document.getElementById(`song-row-${newIdx}`);
-                  const newTitle = document.getElementById(`song-title-${newIdx}`);
-                  if (newRow) newRow.classList.add("song-row-active");
-                  if (newTitle) { newTitle.classList.remove("text-white"); newTitle.classList.add("text-fuchsia-300"); }
+                  if (newRow) newRow.classList.add("active");
                 }
               }
 
               function loadTrack(idx, autoPlay = false) { if (window.CosmosNative) window.CosmosNative.loadTrack(idx, autoPlay); }
               function togglePlay() { if (!tracks.length) { rescanPhoneLibrary(); return; } if (window.CosmosNative) window.CosmosNative.togglePlay(); }
-              function playAudio() { if (window.CosmosNative) window.CosmosNative.playAudio(); }
-              function pauseAudio() { if (window.CosmosNative) window.CosmosNative.pauseAudio(); }
               function prevTrack() { if (window.CosmosNative) window.CosmosNative.prevTrack(); }
               function nextTrack() { if (window.CosmosNative) window.CosmosNative.nextTrack(); }
               function seekDelta(deltaMs) { if (window.CosmosNative) window.CosmosNative.seekByDeltaMs(deltaMs); }
@@ -1343,25 +1547,26 @@ jobs:
               function onSeekCommit(val) {
                 const pct = parseFloat(val) || 0;
                 if (window.CosmosNative) window.CosmosNative.seekToPercent(pct);
-                setTimeout(() => { isDraggingSeek = false; }, 150);
+                setTimeout(() => { isDraggingSeek = false; }, 120);
               }
 
               function updatePlayButtons(p) {
-                const icon = p ? '<i class="fa-solid fa-pause"></i>' : '<i class="fa-solid fa-play"></i>';
-                document.getElementById("miniPlayBtn").innerHTML = icon;
-                document.getElementById("fullPlayBtn").innerHTML = icon;
+                const sym = p ? "⏸" : "▶";
+                document.getElementById("miniPlayBtn").textContent = sym;
+                document.getElementById("fullPlayBtn").textContent = sym;
               }
 
               function toggleShuffle() {
                 shuffleMode = !shuffleMode;
-                document.getElementById("shuffleBtn").className = shuffleMode ? "w-9 h-9 rounded-full flex items-center justify-center text-fuchsia-400" : "w-9 h-9 rounded-full flex items-center justify-center text-purple-400/50";
+                document.getElementById("shuffleBtn").style.opacity = shuffleMode ? "1" : "0.45";
                 if (window.CosmosNative) window.CosmosNative.setShuffleAndRepeat(shuffleMode, repeatMode);
               }
 
               function cycleRepeat() {
                 repeatMode = (repeatMode + 1) % 3;
-                document.getElementById("repeatBtn").className = repeatMode > 0 ? "w-9 h-9 rounded-full flex items-center justify-center text-fuchsia-400 relative" : "w-9 h-9 rounded-full flex items-center justify-center text-purple-400/50 relative";
-                document.getElementById("repeatOneBadge").classList.toggle("hidden", repeatMode !== 2);
+                const btn = document.getElementById("repeatBtn");
+                btn.style.opacity = repeatMode > 0 ? "1" : "0.45";
+                btn.textContent = repeatMode === 2 ? "🔂" : "🔁";
                 if (window.CosmosNative) window.CosmosNative.setShuffleAndRepeat(shuffleMode, repeatMode);
               }
 
@@ -1381,7 +1586,7 @@ jobs:
                 const label = document.getElementById("timerText");
                 if (mins > 0) {
                   label.textContent = `${mins}m`;
-                  sleepTimerId = setTimeout(() => { pauseAudio(); label.textContent = "Off"; }, mins * 60000);
+                  sleepTimerId = setTimeout(() => { if(window.CosmosNative) window.CosmosNative.pauseAudio(); label.textContent = "Off"; }, mins * 60000);
                 } else label.textContent = "Off";
                 closeModal("timerModal");
               }
@@ -1390,9 +1595,7 @@ jobs:
                 currentTab = tab; activePlaylistViewId = null;
                 ["songs", "favorites", "playlists", "artists", "albums"].forEach(t => {
                   const btn = document.getElementById(`tab-${t}`); if (!btn) return;
-                  btn.className = t === tab
-                    ? "px-4 py-1.5 rounded-full text-xs font-bold bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white shadow-md whitespace-nowrap flex items-center gap-1"
-                    : "px-4 py-1.5 rounded-full text-xs font-semibold glass-pill text-purple-200/85 whitespace-nowrap flex items-center gap-1";
+                  btn.className = t === tab ? "tab-btn btn-grad" : "tab-btn pill";
                 });
                 renderLibrary();
               }
@@ -1407,21 +1610,21 @@ jobs:
                 const liked = isTrackLiked(track.id);
                 const div = document.createElement("div");
                 div.id = `song-row-${idx}`;
-                div.className = `p-2.5 rounded-2xl flex items-center justify-between gap-3 cursor-pointer song-row-fast ${isCur ? "song-row-active" : ""}`;
+                div.className = `song-row ${isCur ? "active" : ""}`;
                 let pressTimer = null, longPressTriggered = false;
-                div.addEventListener("touchstart", () => { longPressTriggered = false; pressTimer = setTimeout(() => { longPressTriggered = true; openActionSheet(idx); }, 460); }, { passive: true });
+                div.addEventListener("touchstart", () => { longPressTriggered = false; pressTimer = setTimeout(() => { longPressTriggered = true; openActionSheet(idx); }, 450); }, { passive: true });
                 div.addEventListener("touchend", () => { if (pressTimer) clearTimeout(pressTimer); });
                 div.addEventListener("touchmove", () => { if (pressTimer) clearTimeout(pressTimer); });
                 div.oncontextmenu = (e) => { e.preventDefault(); openActionSheet(idx); return false; };
 
                 const mainArea = document.createElement("div");
-                mainArea.className = "flex items-center gap-3 min-w-0 flex-1";
+                mainArea.style.cssText = "display:flex;align-items:center;gap:11px;min-width:0;flex:1;cursor:pointer;";
                 mainArea.onclick = () => { if (!longPressTriggered) { if (currentListContext) syncQueueWithNative(currentListContext); loadTrack(idx, true); } };
-                mainArea.innerHTML = `<img src="${track.thumb}" loading="lazy" decoding="async" onerror="this.onerror=null;this.src='ic_launcher.png';" class="w-12 h-12 cover-row object-cover shrink-0 bg-purple-950" /><div class="min-w-0 flex-1"><h4 id="song-title-${idx}" class="text-sm font-bold ${isCur ? "text-fuchsia-300" : "text-white"} truncate">${track.title}</h4><p class="text-xs text-purple-300/70 truncate">${track.artist} • ${track.album}</p></div>`;
+                mainArea.innerHTML = `<img src="${track.thumb}" loading="lazy" decoding="async" onerror="this.onerror=null;this.src='ic_launcher.png';" class="cover-sm" /><div style="min-width:0;flex:1;"><div class="truncate" style="font-size:13px;font-weight:700;color:#fff;">${track.title}</div><div class="truncate" style="font-size:11px;color:#d8b4fe;margin-top:2px;">${track.artist} • ${track.album}</div></div>`;
 
                 const actionsArea = document.createElement("div");
-                actionsArea.className = "flex items-center gap-1 shrink-0";
-                actionsArea.innerHTML = `${extraRightHtml}<button id="row-like-btn-${idx}" onclick="toggleLikeByIdx(${idx}, event)" class="w-8 h-8 rounded-full flex items-center justify-center ${liked ? 'text-pink-500' : 'text-purple-300/50'}"><i class="${liked ? 'fa-solid' : 'fa-regular'} fa-heart text-xs"></i></button><button onclick="event.stopPropagation(); openActionSheet(${idx});" class="w-8 h-8 rounded-full flex items-center justify-center text-purple-300/75"><i class="fa-solid fa-ellipsis-vertical text-xs"></i></button>`;
+                actionsArea.style.cssText = "display:flex;align-items:center;gap:2px;flex-shrink:0;";
+                actionsArea.innerHTML = `${extraRightHtml}<button id="row-like-btn-${idx}" onclick="toggleLikeByIdx(${idx}, event)" style="width:32px;height:32px;font-size:13px;">${liked ? '❤️' : '♡'}</button><button onclick="event.stopPropagation();openActionSheet(${idx});" style="width:30px;height:32px;font-size:15px;color:#d8b4fe;">⋮</button>`;
                 div.appendChild(mainArea); div.appendChild(actionsArea);
                 return div;
               }
@@ -1431,8 +1634,8 @@ jobs:
                 const query = document.getElementById("searchInput").value.toLowerCase();
                 document.getElementById("countSongs").textContent = tracks.length;
                 container.innerHTML = "";
-                if (tracks.length === 0) {
-                  container.innerHTML = `<div class="card-2027 rounded-3xl p-8 text-center my-6"><h3 class="text-sm font-bold text-white mb-1">Escaneando tu Música...</h3><button onclick="rescanPhoneLibrary()" class="mt-3 px-6 py-2.5 rounded-full bg-gradient-to-r from-purple-600 to-fuchsia-600 text-white text-xs font-bold shadow-lg">Escanear Memoria</button></div>`;
+                if (!tracks.length) {
+                  container.innerHTML = `<div class="bento-card" style="justify-content:center;padding:28px;flex-direction:column;gap:12px;"><div style="font-size:13px;font-weight:700;">Escaneando tu Música...</div><button onclick="rescanPhoneLibrary()" class="btn-grad" style="padding:9px 20px;font-size:12px;">Escanear Memoria</button></div>`;
                   return;
                 }
                 const frag = document.createDocumentFragment();
@@ -1440,75 +1643,63 @@ jobs:
                 if (filterField && filterValue) {
                   filtered = filtered.filter(t => t[filterField] === filterValue);
                   const back = document.createElement("button");
-                  back.className = "mb-2 px-3.5 py-1.5 rounded-full glass-pill text-xs text-fuchsia-300 font-bold flex items-center gap-1.5";
-                  back.innerHTML = `<i class="fa-solid fa-arrow-left"></i> Volver`;
+                  back.className = "pill"; back.style.cssText = "padding:7px 14px;font-size:12px;font-weight:700;align-self:flex-start;margin-bottom:6px;";
+                  back.textContent = "← Volver";
                   back.onclick = () => renderLibrary();
                   frag.appendChild(back);
                 }
                 if (currentTab === "songs" || filterField) {
                   filtered.forEach(track => frag.appendChild(createSongRowElement(track, tracks.indexOf(track), filtered)));
                 } else if (currentTab === "favorites") {
-                  const favTracks = filtered.filter(t => isTrackLiked(t.id));
-                  if (!favTracks.length) {
-                    container.innerHTML = `<div class="card-2027 rounded-3xl p-8 text-center text-xs text-purple-300/80"><i class="fa-regular fa-heart text-2xl text-pink-400 mb-2 block"></i>Aún no tienes canciones en Tus Me Gusta.</div>`;
-                    return;
-                  }
-                  favTracks.forEach(track => frag.appendChild(createSongRowElement(track, tracks.indexOf(track), favTracks)));
+                  const favs = filtered.filter(t => isTrackLiked(t.id));
+                  if (!favs.length) { container.innerHTML = `<div class="bento-card" style="justify-content:center;padding:24px;font-size:12px;color:#d8b4fe;">Aún no tienes canciones en Tus Me Gusta ❤️</div>`; return; }
+                  favs.forEach(track => frag.appendChild(createSongRowElement(track, tracks.indexOf(track), favs)));
                 } else if (currentTab === "playlists") {
                   if (activePlaylistViewId) {
                     const pl = userPlaylists.find(p => p.id === activePlaylistViewId);
                     if (!pl) { activePlaylistViewId = null; renderLibrary(); return; }
                     const topBar = document.createElement("div");
-                    topBar.className = "flex items-center justify-between mb-3";
-                    topBar.innerHTML = `<button onclick="activePlaylistViewId=null; renderLibrary();" class="px-3.5 py-1.5 rounded-full glass-pill text-xs text-fuchsia-300 font-bold flex items-center gap-1.5"><i class="fa-solid fa-arrow-left"></i> Playlists</button><h3 class="text-sm font-extrabold text-white truncate">${pl.name}</h3>`;
+                    topBar.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;";
+                    topBar.innerHTML = `<button onclick="activePlaylistViewId=null;renderLibrary();" class="pill" style="padding:7px 14px;font-size:12px;font-weight:700;">← Playlists</button><b style="font-size:14px;">${pl.name}</b>`;
                     frag.appendChild(topBar);
                     const plTracks = pl.tracks.map(id => tracks.find(t => t.id === id)).filter(Boolean);
-                    if (!plTracks.length) {
-                      const empty = document.createElement("div");
-                      empty.className = "card-2027 rounded-3xl p-6 text-center text-xs text-purple-300/80";
-                      empty.innerHTML = "Esta playlist está vacía.";
-                      frag.appendChild(empty);
-                    } else {
-                      plTracks.forEach(track => {
-                        const rmBtn = `<button onclick="removeTrackFromPlaylist('${pl.id}', '${track.id}', event)" class="w-8 h-8 rounded-full flex items-center justify-center text-red-400/80"><i class="fa-solid fa-xmark text-xs"></i></button>`;
-                        frag.appendChild(createSongRowElement(track, tracks.indexOf(track), plTracks, rmBtn));
-                      });
-                    }
+                    plTracks.forEach(track => {
+                      const rmBtn = `<button onclick="removeTrackFromPlaylist('${pl.id}','${track.id}',event)" style="width:28px;height:28px;color:#fda4af;">✕</button>`;
+                      frag.appendChild(createSongRowElement(track, tracks.indexOf(track), plTracks, rmBtn));
+                    });
                     container.appendChild(frag); return;
                   }
-                  const headerBtn = document.createElement("button");
-                  headerBtn.className = "w-full p-3.5 mb-2 rounded-2xl bg-gradient-to-r from-purple-700 to-fuchsia-600 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-md";
-                  headerBtn.innerHTML = `<i class="fa-solid fa-plus"></i> Crear Nueva Playlist Personalizada`;
-                  headerBtn.onclick = () => openCreatePlaylistModal(false);
-                  frag.appendChild(headerBtn);
+                  const newBtn = document.createElement("button");
+                  newBtn.className = "btn-grad"; newBtn.style.cssText = "padding:12px;font-size:12px;margin-bottom:6px;";
+                  newBtn.textContent = "+ Crear Nueva Playlist Personalizada";
+                  newBtn.onclick = () => openCreatePlaylistModal(false);
+                  frag.appendChild(newBtn);
                   userPlaylists.forEach(pl => {
-                    const firstTrack = pl.tracks.map(id => tracks.find(t => t.id === id)).find(Boolean);
+                    const first = pl.tracks.map(id => tracks.find(t => t.id === id)).find(Boolean);
                     const card = document.createElement("div");
-                    card.className = "card-2027 p-3 rounded-2xl flex items-center justify-between cursor-pointer";
+                    card.className = "song-row";
                     card.onclick = () => { activePlaylistViewId = pl.id; renderLibrary(); };
-                    card.innerHTML = `<div class="flex items-center gap-3.5 min-w-0"><img src="${firstTrack ? firstTrack.thumb : 'ic_launcher.png'}" onerror="this.onerror=null;this.src='ic_launcher.png';" class="w-[52px] h-[52px] cover-row object-cover shrink-0" /><div class="min-w-0"><h4 class="text-sm font-bold text-white truncate">${pl.name}</h4><p class="text-xs text-fuchsia-300/75">${pl.tracks.length} canciones</p></div></div><div class="flex items-center gap-2"><button onclick="deletePlaylist('${pl.id}', event)" class="w-8 h-8 rounded-full flex items-center justify-center text-purple-400/60"><i class="fa-regular fa-trash-can text-xs"></i></button><i class="fa-solid fa-chevron-right text-purple-400 text-xs pr-1"></i></div>`;
+                    card.innerHTML = `<div style="display:flex;align-items:center;gap:11px;min-width:0;"><img src="${first ? first.thumb : 'ic_launcher.png'}" onerror="this.onerror=null;this.src='ic_launcher.png';" class="cover-sm" /><div><div style="font-size:13px;font-weight:700;">${pl.name}</div><div style="font-size:11px;color:#f0abfc;">${pl.tracks.length} canciones</div></div></div><button onclick="deletePlaylist('${pl.id}',event)" style="padding:8px;color:#fda4af;">🗑</button>`;
                     frag.appendChild(card);
                   });
                 } else if (currentTab === "artists") {
                   [...new Set(filtered.map(t => t.artist))].forEach(artist => {
-                    const artistTracks = tracks.filter(t => t.artist === artist);
+                    const list = tracks.filter(t => t.artist === artist);
                     const div = document.createElement("div");
-                    div.className = "card-2027 p-3 rounded-2xl flex items-center justify-between cursor-pointer";
+                    div.className = "song-row";
                     div.onclick = () => renderLibrary("artist", artist);
-                    div.innerHTML = `<div class="flex items-center gap-3.5"><img src="${artistTracks[0]?.thumb}" onerror="this.onerror=null;this.src='ic_launcher.png';" class="w-12 h-12 rounded-full object-cover border border-fuchsia-400/40" /><div><h4 class="text-sm font-bold text-white">${artist}</h4><p class="text-xs text-purple-300/70">${artistTracks.length} pistas</p></div></div><i class="fa-solid fa-chevron-right text-purple-400 text-xs pr-2"></i>`;
+                    div.innerHTML = `<div style="display:flex;align-items:center;gap:11px;"><img src="${list[0]?.thumb}" onerror="this.onerror=null;this.src='ic_launcher.png';" class="cover-sm" style="border-radius:50%;" /><div><div style="font-size:13px;font-weight:700;">${artist}</div><div style="font-size:11px;color:#d8b4fe;">${list.length} pistas</div></div></div><span>›</span>`;
                     frag.appendChild(div);
                   });
                 } else if (currentTab === "albums") {
-                  const grid = document.createElement("div"); grid.className = "grid grid-cols-2 gap-3";
                   [...new Set(filtered.map(t => t.album))].forEach(album => {
                     const sample = tracks.find(t => t.album === album);
-                    const card = document.createElement("div");
-                    card.className = "card-2027 p-3 rounded-3xl cursor-pointer";
-                    card.onclick = () => renderLibrary("album", album);
-                    card.innerHTML = `<img src="${sample.thumb}" onerror="this.onerror=null;this.src='ic_launcher.png';" class="w-full aspect-square cover-2027 object-cover mb-2.5" /><h4 class="text-xs font-bold text-white truncate px-1">${album}</h4><p class="text-[11px] text-purple-300/75 truncate px-1">${sample.artist}</p>`;
-                    grid.appendChild(card);
+                    const div = document.createElement("div");
+                    div.className = "song-row";
+                    div.onclick = () => renderLibrary("album", album);
+                    div.innerHTML = `<div style="display:flex;align-items:center;gap:11px;"><img src="${sample?.thumb}" onerror="this.onerror=null;this.src='ic_launcher.png';" class="cover-sm" /><div><div style="font-size:13px;font-weight:700;">${album}</div><div style="font-size:11px;color:#d8b4fe;">${sample?.artist}</div></div></div><span>›</span>`;
+                    frag.appendChild(div);
                   });
-                  frag.appendChild(grid);
                 }
                 container.appendChild(frag);
               }
@@ -1536,7 +1727,7 @@ jobs:
                   document.getElementById("fullAlbumName").textContent = t.album;
                   setImageWithFallback(document.getElementById("miniCover"), t.thumb);
                   setImageWithFallback(document.getElementById("fullCover"), t.cover);
-                  renderLibrary(); showToast("✨ Información actualizada");
+                  renderLibrary(); showToast("✨ Guardado");
                 };
                 if (coverFile) {
                   const reader = new FileReader();
@@ -1546,15 +1737,13 @@ jobs:
                 closeModal("editModal");
               }
 
-              function openModal(id) { document.getElementById(id).classList.remove("hidden"); document.getElementById(id).classList.add("flex"); }
-              function closeModal(id) { document.getElementById(id).classList.add("hidden"); document.getElementById(id).classList.remove("flex"); }
+              function openModal(id) { document.getElementById(id).classList.add("show-flex"); }
+              function closeModal(id) { document.getElementById(id).classList.remove("show-flex"); }
 
               window.addEventListener("DOMContentLoaded", () => {
                 renderEqButtons(); updateBentoCounters(); rescanPhoneLibrary();
                 const splash = document.getElementById("welcomeSplash");
-                const bar = document.getElementById("splashBar");
-                setTimeout(() => { if(bar) bar.style.width = "100%"; }, 80);
-                setTimeout(() => { if(splash) { splash.style.opacity = "0"; setTimeout(() => splash.remove(), 500); } }, 1500);
+                setTimeout(() => { if(splash) { splash.style.opacity = "0"; setTimeout(() => splash.remove(), 400); } }, 1100);
               });
             </script>
           </body>
