@@ -35,7 +35,7 @@ jobs:
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
           echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
 
-      - name: Ensamblar COSMOS 2027 Ultra-60FPS + Bluetooth Turbo
+      - name: Ensamblar COSMOS Motor Audio 100% Nativo
         run: |
           mkdir -p app/src/main/java/com/belmont/cosmos
           mkdir -p app/src/main/assets
@@ -43,7 +43,6 @@ jobs:
           mkdir -p app/src/main/res/drawable
           mkdir -p app/src/main/res/mipmap-xxhdpi
 
-          # Copiar tus imagenes reales a recursos nativos y assets
           if [ -f "ic_launcher.png" ]; then
             cp ic_launcher.png app/src/main/res/drawable/ic_launcher.png
             cp ic_launcher.png app/src/main/res/mipmap-xxhdpi/ic_launcher.png
@@ -62,7 +61,6 @@ jobs:
             cp app/src/main/res/drawable/splash_bg.png app/src/main/assets/splash_bg.png
           fi
 
-          # ICONOS VECTORIALES DE ALTA GAMA PARA NOTIFICACION MULTIMEDIA
           cat << 'EOF' > app/src/main/res/drawable/ic_cosmos_notif.xml
           <vector xmlns:android="http://schemas.android.com/apk/res/android"
               android:width="24dp"
@@ -162,8 +160,8 @@ jobs:
                   applicationId "com.belmont.cosmos"
                   minSdk 26
                   targetSdk 34
-                  versionCode 4
-                  versionName "4.0-TURBO"
+                  versionCode 5
+                  versionName "5.0-NATIVE"
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
@@ -178,7 +176,6 @@ jobs:
           }
           EOF
 
-          # MANIFIESTO CON IGNORAR OPTIMIZACION DE BATERIA PARA QUE NUNCA SE TRABE EN BLUETOOTH
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -223,7 +220,7 @@ jobs:
           </manifest>
           EOF
 
-          # SERVICIO EN PRIMER PLANO CON ALTA PRIORIDAD Y WAKELOCK CONTINUO
+          # SERVICIO EN PRIMER PLANO NATIVO PARA BLUETOOTH ININTERRUMPIDO
           cat << 'EOF' > app/src/main/java/com/belmont/cosmos/CosmosPlaybackService.kt
           package com.belmont.cosmos
 
@@ -232,7 +229,6 @@ jobs:
           import android.content.Context
           import android.content.Intent
           import android.content.pm.ServiceInfo
-          import android.net.wifi.WifiManager
           import android.os.Build
           import android.os.IBinder
           import android.os.PowerManager
@@ -240,7 +236,6 @@ jobs:
 
           class CosmosPlaybackService : Service() {
               private var wakeLock: PowerManager.WakeLock? = null
-              private var wifiLock: WifiManager.WifiLock? = null
 
               override fun onCreate() {
                   super.onCreate()
@@ -249,12 +244,7 @@ jobs:
                   } catch (_: Exception) {}
 
                   val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-                  wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Cosmos::TurboAudioWakeLock").apply {
-                      setReferenceCounted(false)
-                  }
-
-                  val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-                  wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "Cosmos::TurboAudioWifiLock").apply {
+                  wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Cosmos::NativeMediaPlayerWakeLock").apply {
                       setReferenceCounted(false)
                   }
               }
@@ -263,7 +253,6 @@ jobs:
                   val isPlaying = intent?.getBooleanExtra("IS_PLAYING", true) ?: true
                   if (isPlaying) {
                       if (wakeLock?.isHeld == false) wakeLock?.acquire(12 * 60 * 60 * 1000L)
-                      if (wifiLock?.isHeld == false) wifiLock?.acquire()
                   }
 
                   val notif: Notification? = MainActivity.latestNotification
@@ -281,7 +270,6 @@ jobs:
 
               override fun onDestroy() {
                   if (wakeLock?.isHeld == true) wakeLock?.release()
-                  if (wifiLock?.isHeld == true) wifiLock?.release()
                   super.onDestroy()
               }
 
@@ -289,7 +277,7 @@ jobs:
           }
           EOF
 
-          # MAINACTIVITY CON CACHE RAM DE PORTADAS (120 FPS), STREAMING 128KB Y EXENCION DE DOZE
+          # MAINACTIVITY CON MOTOR MEDIAPLAYER 100% NATIVO + HARDWARE EQUALIZER + COLA AUTONOMA
           cat << 'EOF' > app/src/main/java/com/belmont/cosmos/MainActivity.kt
           package com.belmont.cosmos
 
@@ -316,11 +304,15 @@ jobs:
           import android.media.AudioFocusRequest
           import android.media.AudioManager
           import android.media.MediaMetadata
+          import android.media.MediaPlayer
+          import android.media.audiofx.Equalizer
           import android.media.session.MediaSession
           import android.media.session.PlaybackState
           import android.net.Uri
           import android.os.Build
           import android.os.Bundle
+          import android.os.Handler
+          import android.os.Looper
           import android.os.PowerManager
           import android.provider.MediaStore
           import android.provider.Settings
@@ -341,32 +333,57 @@ jobs:
           import java.io.BufferedInputStream
           import java.io.ByteArrayInputStream
           import java.io.ByteArrayOutputStream
-          import java.io.FileInputStream
 
-          // WebView blindado contra suspension de pantalla y modo ahorro Bluetooth
-          class CosmosKeepAliveWebView(context: Context) : WebView(context) {
-              override fun onWindowVisibilityChanged(visibility: Int) {
-                  super.onWindowVisibilityChanged(View.VISIBLE)
-              }
-              override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
-                  super.onWindowFocusChanged(true)
-              }
-          }
+          data class NativeTrack(
+              val index: Int,
+              val id: String,
+              val mediaId: Long,
+              var title: String,
+              var artist: String,
+              var album: String,
+              val albumId: Long,
+              val durationMs: Long
+          )
 
           class MainActivity : ComponentActivity() {
               companion object {
                   var latestNotification: Notification? = null
               }
 
-              private lateinit var webView: CosmosKeepAliveWebView
+              private lateinit var webView: WebView
               private var mediaSession: MediaSession? = null
               private lateinit var audioManager: AudioManager
               private var focusRequest: AudioFocusRequest? = null
-              private val CHANNEL_ID = "cosmos_turbo_media_channel"
+              private val CHANNEL_ID = "cosmos_native_engine_channel"
               private var fallbackCosmosArt: Bitmap? = null
               private var fallbackThumbBytes: ByteArray? = null
 
-              // Cache en RAM para miniaturas (evita decodificar imagenes gigantes al hacer scroll)
+              // Motor de Audio 100% Nativo
+              private var mediaPlayer: MediaPlayer? = null
+              private var hardwareEq: Equalizer? = null
+              private var currentEqSessionId: Int = -1
+              private var currentEqGainsDb = intArrayOf(5, 2, 0, 4, 6)
+              private var isPlayerPrepared = false
+
+              private val trackList = mutableListOf<NativeTrack>()
+              private var activeQueueIndices = mutableListOf<Int>()
+              private var currentIndex: Int = -1
+              private var shuffleMode: Boolean = false
+              private var repeatMode: Int = 0 // 0=Off, 1=All, 2=One
+              private var currentArtBitmap: Bitmap? = null
+
+              private val uiHandler = Handler(Looper.getMainLooper())
+              private var isUiVisible = true
+
+              private val progressRunnable = object : Runnable {
+                  override fun run() {
+                      if (isUiVisible && isPlayerPrepared && mediaPlayer?.isPlaying == true) {
+                          syncProgressToWeb()
+                      }
+                      uiHandler.postDelayed(this, 400L)
+                  }
+              }
+
               private val thumbCache = object : LruCache<Long, ByteArray>(12 * 1024 * 1024) {
                   override fun sizeOf(key: Long, value: ByteArray): Int = value.size
               }
@@ -374,9 +391,10 @@ jobs:
               private val mediaActionReceiver = object : BroadcastReceiver() {
                   override fun onReceive(context: Context?, intent: Intent?) {
                       when (intent?.action) {
-                          "COSMOS_PREV" -> webView.evaluateJavascript("prevTrack();", null)
-                          "COSMOS_TOGGLE" -> webView.evaluateJavascript("togglePlay();", null)
-                          "COSMOS_NEXT" -> webView.evaluateJavascript("nextTrack();", null)
+                          "COSMOS_PREV" -> prevTrackNative()
+                          "COSMOS_TOGGLE" -> togglePlayNative()
+                          "COSMOS_NEXT" -> nextTrackNative()
+                          AudioManager.ACTION_AUDIO_BECOMING_NOISY -> pauseNative()
                       }
                   }
               }
@@ -387,12 +405,13 @@ jobs:
                   window.navigationBarColor = Color.parseColor("#040109")
                   audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
                   fallbackCosmosArt = createCosmosPurpleArtwork()
-                  fallbackThumbBytes = bitmapToJpegBytes(Bitmap.createScaledBitmap(fallbackCosmosArt!!, 140, 140, true), 80)
+                  currentArtBitmap = fallbackCosmosArt
+                  fallbackThumbBytes = bitmapToJpegBytes(Bitmap.createScaledBitmap(fallbackCosmosArt!!, 140, 140, true), 82)
 
                   setupMediaSessionAndChannel()
                   requestBatteryOptimizationExemption()
 
-                  webView = CosmosKeepAliveWebView(this)
+                  webView = WebView(this)
                   webView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
                   setContentView(webView)
 
@@ -403,20 +422,12 @@ jobs:
                       allowFileAccess = true
                       allowContentAccess = true
                       cacheMode = WebSettings.LOAD_DEFAULT
-                      offscreenPreRaster = true
                   }
                   webView.webChromeClient = WebChromeClient()
                   webView.webViewClient = object : WebViewClient() {
                       override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
                           val uriObj = request?.url ?: return null
                           val url = uriObj.toString()
-
-                          if (url.startsWith("https://cosmos.local/audio/")) {
-                              val id = uriObj.lastPathSegment?.toLongOrNull() ?: return null
-                              val contentUri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
-                              return serveAudioStreamWithRange(contentUri, request.requestHeaders)
-                          }
-
                           if (url.startsWith("https://cosmos.local/albumart/")) {
                               val albumId = uriObj.lastPathSegment?.toLongOrNull() ?: return null
                               val isThumb = uriObj.getQueryParameter("thumb") == "1"
@@ -427,9 +438,244 @@ jobs:
                   }
                   webView.addJavascriptInterface(CosmosBridge(), "CosmosNative")
                   webView.loadUrl("file:///android_asset/index.html")
+                  uiHandler.postDelayed(progressRunnable, 500L)
               }
 
-              // Pide a Android excluir a COSMOS del modo Doze para que Bluetooth jamas se corte
+              // Motor Nativo: Carga y reproduce directamente desde el kernel de Android sin pasar por WebView
+              private fun loadTrackNative(index: Int, autoPlay: Boolean) {
+                  if (index < 0 || index >= trackList.size) return
+                  currentIndex = index
+                  val track = trackList[index]
+
+                  try {
+                      isPlayerPrepared = false
+                      if (mediaPlayer == null) {
+                          mediaPlayer = MediaPlayer().apply {
+                              setWakeMode(applicationContext, PowerManager.PARTIAL_WAKE_LOCK)
+                              setAudioAttributes(
+                                  AudioAttributes.Builder()
+                                      .setUsage(AudioAttributes.USAGE_MEDIA)
+                                      .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                                      .build()
+                              )
+                              setOnCompletionListener {
+                                  onNativeTrackCompleted()
+                              }
+                              setOnErrorListener { _, _, _ ->
+                                  isPlayerPrepared = false
+                                  true
+                              }
+                          }
+                      } else {
+                          mediaPlayer?.reset()
+                          mediaPlayer?.setWakeMode(applicationContext, PowerManager.PARTIAL_WAKE_LOCK)
+                          mediaPlayer?.setAudioAttributes(
+                              AudioAttributes.Builder()
+                                  .setUsage(AudioAttributes.USAGE_MEDIA)
+                                  .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                                  .build()
+                          )
+                      }
+
+                      val contentUri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, track.mediaId)
+                      mediaPlayer?.setDataSource(applicationContext, contentUri)
+                      mediaPlayer?.prepare()
+                      isPlayerPrepared = true
+
+                      setupHardwareEqualizer(mediaPlayer!!.audioSessionId)
+
+                      if (autoPlay) {
+                          requestCosmosAudioFocus()
+                          mediaPlayer?.start()
+                      }
+
+                      // Actualizar portada de notificacion en hilo secundario y sincronizar UI
+                      syncFullTrackToWeb()
+                      Thread {
+                          val bmp = loadAlbumArtBitmap(track.albumId)
+                          currentArtBitmap = bmp
+                          runOnUiThread { updateNotificationAndSession() }
+                      }.start()
+
+                  } catch (e: Exception) {
+                      e.printStackTrace()
+                  }
+              }
+
+              private fun playNative() {
+                  if (!isPlayerPrepared) {
+                      if (trackList.isNotEmpty()) {
+                          loadTrackNative(if (currentIndex >= 0) currentIndex else 0, true)
+                      }
+                      return
+                  }
+                  try {
+                      requestCosmosAudioFocus()
+                      if (mediaPlayer?.isPlaying == false) {
+                          mediaPlayer?.start()
+                      }
+                      syncFullTrackToWeb()
+                      updateNotificationAndSession()
+                  } catch (_: Exception) {}
+              }
+
+              private fun pauseNative() {
+                  if (!isPlayerPrepared) return
+                  try {
+                      if (mediaPlayer?.isPlaying == true) {
+                          mediaPlayer?.pause()
+                      }
+                      syncFullTrackToWeb()
+                      updateNotificationAndSession()
+                  } catch (_: Exception) {}
+              }
+
+              private fun togglePlayNative() {
+                  if (!isPlayerPrepared) {
+                      playNative()
+                      return
+                  }
+                  if (mediaPlayer?.isPlaying == true) {
+                      pauseNative()
+                  } else {
+                      playNative()
+                  }
+              }
+
+              private fun seekToPercentNative(percent: Double) {
+                  if (!isPlayerPrepared) return
+                  try {
+                      val mp = mediaPlayer ?: return
+                      val dur = mp.duration
+                      if (dur > 0) {
+                          val targetMs = ((percent.coerceIn(0.0, 100.0) / 100.0) * dur).toInt()
+                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                              mp.seekTo(targetMs.toLong(), MediaPlayer.SEEK_CLOSEST_SYNC)
+                          } else {
+                              mp.seekTo(targetMs)
+                          }
+                          syncProgressToWeb()
+                          updateNotificationAndSession()
+                      }
+                  } catch (_: Exception) {}
+              }
+
+              private fun seekToMsNative(targetMs: Long) {
+                  if (!isPlayerPrepared) return
+                  try {
+                      val mp = mediaPlayer ?: return
+                      val dur = mp.duration
+                      if (dur > 0) {
+                          val clamped = targetMs.coerceIn(0L, dur.toLong())
+                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                              mp.seekTo(clamped, MediaPlayer.SEEK_CLOSEST_SYNC)
+                          } else {
+                              mp.seekTo(clamped.toInt())
+                          }
+                          syncProgressToWeb()
+                          updateNotificationAndSession()
+                      }
+                  } catch (_: Exception) {}
+              }
+
+              private fun seekByDeltaMsNative(deltaMs: Int) {
+                  if (!isPlayerPrepared) return
+                  try {
+                      val mp = mediaPlayer ?: return
+                      val dur = mp.duration
+                      if (dur > 0) {
+                          val target = (mp.currentPosition + deltaMs).coerceIn(0, dur)
+                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                              mp.seekTo(target.toLong(), MediaPlayer.SEEK_CLOSEST_SYNC)
+                          } else {
+                              mp.seekTo(target)
+                          }
+                          syncProgressToWeb()
+                          updateNotificationAndSession()
+                      }
+                  } catch (_: Exception) {}
+              }
+
+              private fun prevTrackNative() {
+                  if (trackList.isEmpty()) return
+                  // Si lleva mas de 3.5 segundos, regresa al inicio de la cancion
+                  if (isPlayerPrepared && (mediaPlayer?.currentPosition ?: 0) > 3500) {
+                      seekToMsNative(0L)
+                      return
+                  }
+                  val queue = if (activeQueueIndices.isNotEmpty()) activeQueueIndices else trackList.indices.toList()
+                  if (queue.isEmpty()) return
+                  val posInQueue = queue.indexOf(currentIndex)
+                  val prevIdx = if (posInQueue > 0) queue[posInQueue - 1] else queue.last()
+                  loadTrackNative(prevIdx, true)
+              }
+
+              private fun nextTrackNative() {
+                  if (trackList.isEmpty()) return
+                  val queue = if (activeQueueIndices.isNotEmpty()) activeQueueIndices else trackList.indices.toList()
+                  if (queue.isEmpty()) return
+                  val nextIdx = if (shuffleMode) {
+                      queue.random()
+                  } else {
+                      val posInQueue = queue.indexOf(currentIndex)
+                      if (posInQueue >= 0 && posInQueue + 1 < queue.size) queue[posInQueue + 1] else queue.first()
+                  }
+                  loadTrackNative(nextIdx, true)
+              }
+
+              private fun onNativeTrackCompleted() {
+                  if (trackList.isEmpty()) return
+                  if (repeatMode == 2) {
+                      seekToMsNative(0L)
+                      playNative()
+                      return
+                  }
+                  nextTrackNative()
+              }
+
+              private fun setupHardwareEqualizer(sessionId: Int) {
+                  try {
+                      if (hardwareEq == null || currentEqSessionId != sessionId) {
+                          hardwareEq?.release()
+                          hardwareEq = Equalizer(0, sessionId).apply { enabled = true }
+                          currentEqSessionId = sessionId
+                      }
+                      applyEqGainsToHardware()
+                  } catch (_: Exception) {}
+              }
+
+              private fun applyEqGainsToHardware() {
+                  try {
+                      val eq = hardwareEq ?: return
+                      val numBands = eq.numberOfBands.toInt()
+                      val range = eq.bandLevelRange
+                      val minMb = range[0].toInt()
+                      val maxMb = range[1].toInt()
+                      for (b in 0 until numBands) {
+                          val gainIdx = (b * currentEqGainsDb.size) / numBands
+                          val dbVal = currentEqGainsDb[gainIdx.coerceIn(0, currentEqGainsDb.size - 1)]
+                          val levelMb = (dbVal * 100).coerceIn(minMb, maxMb)
+                          eq.setBandLevel(b.toShort(), levelMb.toShort())
+                      }
+                  } catch (_: Exception) {}
+              }
+
+              private fun syncFullTrackToWeb() {
+                  if (currentIndex < 0 || currentIndex >= trackList.size) return
+                  val playing = isPlayerPrepared && (mediaPlayer?.isPlaying == true)
+                  val posMs = if (isPlayerPrepared) (mediaPlayer?.currentPosition ?: 0) else 0
+                  val durMs = if (isPlayerPrepared) (mediaPlayer?.duration ?: trackList[currentIndex].durationMs.toInt()) else trackList[currentIndex].durationMs.toInt()
+                  webView.evaluateJavascript("window.onNativeTrackState($currentIndex, $playing, $posMs, $durMs);", null)
+              }
+
+              private fun syncProgressToWeb() {
+                  if (!isPlayerPrepared) return
+                  val playing = mediaPlayer?.isPlaying == true
+                  val posMs = mediaPlayer?.currentPosition ?: 0
+                  val durMs = mediaPlayer?.duration ?: 0
+                  webView.evaluateJavascript("window.onNativeProgress($posMs, $durMs, $playing);", null)
+              }
+
               private fun requestBatteryOptimizationExemption() {
                   try {
                       val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -448,7 +694,6 @@ jobs:
                   return baos.toByteArray()
               }
 
-              // Sirve miniaturas ligeras desde RAM en 0ms para lograr 120 FPS al hacer scroll
               private fun serveAlbumArtFast(albumId: Long, isThumb: Boolean): WebResourceResponse? {
                   val headers = mapOf(
                       "Access-Control-Allow-Origin" to "*",
@@ -501,65 +746,19 @@ jobs:
                       .setOnAudioFocusChangeListener { change ->
                           when (change) {
                               AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
-                                  webView.evaluateJavascript("setDuckVolume(0.40);", null)
+                                  try { mediaPlayer?.setVolume(0.35f, 0.35f) } catch (_: Exception) {}
                               }
                               AudioManager.AUDIOFOCUS_GAIN -> {
-                                  webView.evaluateJavascript("setDuckVolume(1.0);", null)
+                                  try { mediaPlayer?.setVolume(1.0f, 1.0f) } catch (_: Exception) {}
+                              }
+                              AudioManager.AUDIOFOCUS_LOSS -> {
+                                  pauseNative()
                               }
                           }
                       }
                       .build()
 
                   focusRequest?.let { audioManager.requestAudioFocus(it) }
-              }
-
-              private fun serveAudioStreamWithRange(uri: Uri, headers: Map<String, String>?): WebResourceResponse? {
-                  return try {
-                      val pfd = contentResolver.openFileDescriptor(uri, "r") ?: return null
-                      val totalLen = pfd.statSize
-                      val rangeHeader = headers?.entries?.firstOrNull { it.key.equals("Range", ignoreCase = true) }?.value
-
-                      val fis = FileInputStream(pfd.fileDescriptor)
-                      var start = 0L
-                      var end = if (totalLen > 0) totalLen - 1 else 0L
-                      var statusCode = 200
-                      var reason = "OK"
-
-                      if (rangeHeader != null && rangeHeader.startsWith("bytes=") && totalLen > 0) {
-                          val parts = rangeHeader.removePrefix("bytes=").split("-")
-                          start = parts[0].toLongOrNull() ?: 0L
-                          if (parts.size > 1 && parts[1].isNotEmpty()) {
-                              end = parts[1].toLongOrNull() ?: (totalLen - 1)
-                          }
-                          if (start > 0) fis.channel.position(start)
-                          statusCode = 206
-                          reason = "Partial Content"
-                      }
-
-                      val contentLen = if (totalLen > 0) (end - start + 1) else -1L
-                      val respHeaders = mutableMapOf(
-                          "Access-Control-Allow-Origin" to "*",
-                          "Accept-Ranges" to "bytes",
-                          "Cache-Control" to "no-cache"
-                      )
-                      if (totalLen > 0) {
-                          respHeaders["Content-Length"] = contentLen.toString()
-                          if (statusCode == 206) {
-                              respHeaders["Content-Range"] = "bytes $start-$end/$totalLen"
-                          }
-                      }
-
-                      // Buffer de 128 KB para lectura ultra estable en Bluetooth
-                      val buffered = object : BufferedInputStream(fis, 131072) {
-                          override fun close() {
-                              super.close()
-                              try { pfd.close() } catch (_: Exception) {}
-                          }
-                      }
-                      WebResourceResponse("audio/mpeg", null, statusCode, reason, respHeaders, buffered)
-                  } catch (e: Exception) {
-                      null
-                  }
               }
 
               private fun createCosmosPurpleArtwork(): Bitmap {
@@ -608,19 +807,19 @@ jobs:
               }
 
               private fun setupMediaSessionAndChannel() {
-                  val channel = NotificationChannel(CHANNEL_ID, "COSMOS Turbo Audio Engine", NotificationManager.IMPORTANCE_LOW).apply {
-                      description = "Reproduccion continua Bluetooth y controles de COSMOS"
+                  val channel = NotificationChannel(CHANNEL_ID, "COSMOS Native Audio", NotificationManager.IMPORTANCE_LOW).apply {
+                      description = "Reproduccion nativa continua Bluetooth y controles de COSMOS"
                       setShowBadge(false)
                   }
                   getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
 
-                  mediaSession = MediaSession(this, "CosmosBelmontTurboSession").apply {
+                  mediaSession = MediaSession(this, "CosmosBelmontNativeSession").apply {
                       setCallback(object : MediaSession.Callback() {
-                          override fun onPlay() { runOnUiThread { webView.evaluateJavascript("playAudio();", null) } }
-                          override fun onPause() { runOnUiThread { webView.evaluateJavascript("pauseAudio();", null) } }
-                          override fun onSkipToNext() { runOnUiThread { webView.evaluateJavascript("nextTrack();", null) } }
-                          override fun onSkipToPrevious() { runOnUiThread { webView.evaluateJavascript("prevTrack();", null) } }
-                          override fun onSeekTo(pos: Long) { runOnUiThread { webView.evaluateJavascript("seekToMs($pos);", null) } }
+                          override fun onPlay() { runOnUiThread { playNative() } }
+                          override fun onPause() { runOnUiThread { pauseNative() } }
+                          override fun onSkipToNext() { runOnUiThread { nextTrackNative() } }
+                          override fun onSkipToPrevious() { runOnUiThread { prevTrackNative() } }
+                          override fun onSeekTo(pos: Long) { runOnUiThread { seekToMsNative(pos) } }
                       })
                       isActive = true
                   }
@@ -629,6 +828,7 @@ jobs:
                       addAction("COSMOS_PREV")
                       addAction("COSMOS_TOGGLE")
                       addAction("COSMOS_NEXT")
+                      addAction(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
                   }
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                       registerReceiver(mediaActionReceiver, filter, Context.RECEIVER_EXPORTED)
@@ -661,6 +861,7 @@ jobs:
               private fun scanDeviceMusic() {
                   Thread {
                       val arr = JSONArray()
+                      val scanned = mutableListOf<NativeTrack>()
                       val projection = arrayOf(
                           MediaStore.Audio.Media._ID,
                           MediaStore.Audio.Media.TITLE,
@@ -682,40 +883,100 @@ jobs:
                           val albumCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
                           val albumIdCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID)
                           val durCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
+                          var idx = 0
                           while (cursor.moveToNext()) {
                               val id = cursor.getLong(idCol)
                               val albumId = cursor.getLong(albumIdCol)
                               val durationMs = cursor.getLong(durCol)
+                              val title = cursor.getString(titleCol) ?: "Pista"
+                              val artist = cursor.getString(artistCol) ?: "Edward Belmont"
+                              val album = cursor.getString(albumCol) ?: "COSMOS"
+
+                              scanned.add(NativeTrack(idx, "ms_$id", id, title, artist, album, albumId, durationMs))
+
                               arr.put(JSONObject().apply {
                                   put("id", "ms_$id")
                                   put("mediaId", id)
-                                  put("title", cursor.getString(titleCol) ?: "Pista")
-                                  put("artist", cursor.getString(artistCol) ?: "Edward Belmont")
-                                  put("album", cursor.getString(albumCol) ?: "COSMOS")
+                                  put("title", title)
+                                  put("artist", artist)
+                                  put("album", album)
                                   put("albumId", albumId)
                                   put("durationMs", durationMs)
-                                  put("audioUrl", "https://cosmos.local/audio/$id")
                                   put("thumb", "https://cosmos.local/albumart/$albumId?thumb=1")
                                   put("cover", "https://cosmos.local/albumart/$albumId")
                               })
+                              idx++
                           }
                       }
                       val jsonStr = arr.toString()
-                      runOnUiThread { webView.evaluateJavascript("window.onNativeLibraryLoaded(${JSONObject.quote(jsonStr)});", null) }
+                      runOnUiThread {
+                          trackList.clear()
+                          trackList.addAll(scanned)
+                          activeQueueIndices = trackList.indices.toMutableList()
+                          webView.evaluateJavascript("window.onNativeLibraryLoaded(${JSONObject.quote(jsonStr)});", null)
+                          if (trackList.isNotEmpty() && currentIndex == -1) {
+                              loadTrackNative(0, false)
+                          }
+                      }
                   }.start()
               }
 
               inner class CosmosBridge {
                   @JavascriptInterface fun rescanMediaStore() { runOnUiThread { checkPermissionsAndScan() } }
+                  @JavascriptInterface fun loadTrack(idx: Int, autoPlay: Boolean) { runOnUiThread { loadTrackNative(idx, autoPlay) } }
+                  @JavascriptInterface fun togglePlay() { runOnUiThread { togglePlayNative() } }
+                  @JavascriptInterface fun playAudio() { runOnUiThread { playNative() } }
+                  @JavascriptInterface fun pauseAudio() { runOnUiThread { pauseNative() } }
+                  @JavascriptInterface fun prevTrack() { runOnUiThread { prevTrackNative() } }
+                  @JavascriptInterface fun nextTrack() { runOnUiThread { nextTrackNative() } }
+                  @JavascriptInterface fun seekToPercent(pct: Double) { runOnUiThread { seekToPercentNative(pct) } }
+                  @JavascriptInterface fun seekByDeltaMs(deltaMs: Int) { runOnUiThread { seekByDeltaMsNative(deltaMs) } }
 
-                  @JavascriptInterface fun updateNotification(title: String, artist: String, album: String, albumId: Long, durationMs: Long, positionMs: Long, isPlaying: Boolean) {
-                      if (isPlaying) {
-                          requestCosmosAudioFocus()
+                  @JavascriptInterface fun setShuffleAndRepeat(shuffle: Boolean, repeat: Int) {
+                      runOnUiThread {
+                          shuffleMode = shuffle
+                          repeatMode = repeat
                       }
-                      Thread {
-                          val artBitmap = loadAlbumArtBitmap(albumId)
-                          runOnUiThread { showMediaNotification(title, artist, album, artBitmap, durationMs, positionMs, isPlaying) }
-                      }.start()
+                  }
+
+                  @JavascriptInterface fun setActiveQueue(jsonIndices: String) {
+                      runOnUiThread {
+                          try {
+                              val arr = JSONArray(jsonIndices)
+                              val list = mutableListOf<Int>()
+                              for (i in 0 until arr.length()) {
+                                  list.add(arr.getInt(i))
+                              }
+                              if (list.isNotEmpty()) activeQueueIndices = list
+                          } catch (_: Exception) {}
+                      }
+                  }
+
+                  @JavascriptInterface fun setEqBand(bandIdx: Int, dbVal: Int) {
+                      runOnUiThread {
+                          if (bandIdx in currentEqGainsDb.indices) {
+                              currentEqGainsDb[bandIdx] = dbVal
+                              applyEqGainsToHardware()
+                          }
+                      }
+                  }
+
+                  @JavascriptInterface fun setEqPresetGains(g0: Int, g1: Int, g2: Int, g3: Int, g4: Int) {
+                      runOnUiThread {
+                          currentEqGainsDb = intArrayOf(g0, g1, g2, g3, g4)
+                          applyEqGainsToHardware()
+                      }
+                  }
+
+                  @JavascriptInterface fun updateTrackMetadata(idx: Int, title: String, artist: String, album: String) {
+                      runOnUiThread {
+                          if (idx in trackList.indices) {
+                              trackList[idx].title = title
+                              trackList[idx].artist = artist
+                              trackList[idx].album = album
+                              if (idx == currentIndex) updateNotificationAndSession()
+                          }
+                      }
                   }
 
                   @JavascriptInterface fun shareTrackNative(mediaId: Long, title: String, artist: String, album: String) {
@@ -744,7 +1005,14 @@ jobs:
                   }
               }
 
-              private fun showMediaNotification(title: String, artist: String, album: String, artBitmap: Bitmap, durationMs: Long, positionMs: Long, isPlaying: Boolean) {
+              private fun updateNotificationAndSession() {
+                  if (currentIndex < 0 || currentIndex >= trackList.size) return
+                  val track = trackList[currentIndex]
+                  val isPlaying = isPlayerPrepared && (mediaPlayer?.isPlaying == true)
+                  val positionMs = if (isPlayerPrepared) (mediaPlayer?.currentPosition?.toLong() ?: 0L) else 0L
+                  val durationMs = if (isPlayerPrepared) (mediaPlayer?.duration?.toLong() ?: track.durationMs) else track.durationMs
+                  val artBitmap = currentArtBitmap ?: fallbackCosmosArt ?: Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
+
                   val state = if (isPlaying) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED
                   val actions = PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or PlaybackState.ACTION_SKIP_TO_NEXT or PlaybackState.ACTION_SKIP_TO_PREVIOUS or PlaybackState.ACTION_SEEK_TO
 
@@ -756,8 +1024,8 @@ jobs:
                   )
 
                   val metadata = MediaMetadata.Builder()
-                      .putString(MediaMetadata.METADATA_KEY_TITLE, title)
-                      .putString(MediaMetadata.METADATA_KEY_ARTIST, "$artist • $album")
+                      .putString(MediaMetadata.METADATA_KEY_TITLE, track.title)
+                      .putString(MediaMetadata.METADATA_KEY_ARTIST, "${track.artist} • ${track.album}")
                       .putString(MediaMetadata.METADATA_KEY_ALBUM, "COSMOS • Belmont Edition")
                       .putLong(MediaMetadata.METADATA_KEY_DURATION, if (durationMs > 0) durationMs else -1L)
                       .putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, artBitmap)
@@ -786,8 +1054,8 @@ jobs:
                   val notification = Notification.Builder(this, CHANNEL_ID)
                       .setSmallIcon(R.drawable.ic_cosmos_notif)
                       .setLargeIcon(artBitmap)
-                      .setContentTitle(title)
-                      .setContentText("$artist • $album")
+                      .setContentTitle(track.title)
+                      .setContentText("${track.artist} • ${track.album}")
                       .setSubText("COSMOS")
                       .setContentIntent(contentPending)
                       .setOngoing(isPlaying)
@@ -815,27 +1083,31 @@ jobs:
                   } catch (_: Exception) {}
               }
 
-              override fun onPause() {
-                  super.onPause()
-                  webView.onResume()
-                  webView.resumeTimers()
+              override fun onResume() {
+                  super.onResume()
+                  isUiVisible = true
+                  syncFullTrackToWeb()
               }
 
-              override fun onStop() {
-                  super.onStop()
-                  webView.onResume()
-                  webView.resumeTimers()
+              override fun onPause() {
+                  super.onPause()
+                  isUiVisible = false
               }
 
               override fun onDestroy() {
-                  super.onDestroy()
+                  uiHandler.removeCallbacksAndMessages(null)
+                  try {
+                      hardwareEq?.release()
+                      mediaPlayer?.release()
+                  } catch (_: Exception) {}
                   unregisterReceiver(mediaActionReceiver)
                   mediaSession?.release()
+                  super.onDestroy()
               }
           }
           EOF
 
-          # INTERFAZ 2027 ULTRA-FLUIDA A 120 FPS (CERO BLUR EN FILAS + HIBERNACION DSP EN SEGUNDO PLANO)
+          # INTERFAZ 2027 ULTRA-FLUIDA SIN RECONOCEDOR DE ACORDES (100% ENLAZADA AL MOTOR NATIVO)
           cat << 'EOF' > app/src/main/assets/index.html
           <!DOCTYPE html>
           <html lang="es">
@@ -886,18 +1158,16 @@ jobs:
                 letter-spacing: 0.36em;
               }
 
-              /* CRISTAL FLOTANTE (SOLO EN HEADER Y MINIPLAYER PARA NO BAJAR FPS) */
               .glass-bar {
-                background: rgba(16, 6, 30, 0.88);
+                background: rgba(16, 6, 30, 0.90);
                 backdrop-filter: blur(16px);
                 -webkit-backdrop-filter: blur(16px);
-                border: 1px solid rgba(232, 121, 249, 0.20);
+                border: 1px solid rgba(232, 121, 249, 0.22);
               }
 
-              /* TARJETA ACELERADA POR GPU A 120 FPS (SIN BLUR COSTOSO EN CADA CANCION) */
               .card-2027 {
-                background: linear-gradient(145deg, rgba(28, 12, 52, 0.90) 0%, rgba(12, 4, 24, 0.95) 100%);
-                border: 1px solid rgba(216, 180, 254, 0.14);
+                background: linear-gradient(145deg, rgba(28, 12, 52, 0.92) 0%, rgba(12, 4, 24, 0.96) 100%);
+                border: 1px solid rgba(216, 180, 254, 0.15);
                 box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
               }
 
@@ -910,8 +1180,8 @@ jobs:
               }
 
               .song-row-active {
-                background: linear-gradient(145deg, rgba(88, 28, 135, 0.65) 0%, rgba(28, 10, 52, 0.95) 100%) !important;
-                border: 1px solid rgba(240, 171, 252, 0.65) !important;
+                background: linear-gradient(145deg, rgba(88, 28, 135, 0.68) 0%, rgba(28, 10, 52, 0.96) 100%) !important;
+                border: 1px solid rgba(240, 171, 252, 0.68) !important;
               }
 
               .glass-pill {
@@ -919,16 +1189,10 @@ jobs:
                 border: 1px solid rgba(192, 132, 252, 0.24);
               }
 
-              .neon-chord-box {
-                background: linear-gradient(160deg, rgba(126, 34, 206, 0.72) 0%, rgba(15, 5, 29, 0.98) 100%);
-                border: 1.5px solid #f0abfc;
-                box-shadow: 0 0 22px rgba(217, 70, 239, 0.4);
-              }
-
               .cover-2027 {
-                border-radius: 22px;
+                border-radius: 26px;
                 border: 1px solid rgba(255, 255, 255, 0.18);
-                box-shadow: 0 16px 36px rgba(0, 0, 0, 0.75), 0 0 28px rgba(192, 38, 211, 0.30);
+                box-shadow: 0 20px 45px rgba(0, 0, 0, 0.8), 0 0 32px rgba(192, 38, 211, 0.32);
               }
 
               .cover-row {
@@ -944,28 +1208,23 @@ jobs:
 
               .splash-letter { display: inline-block; opacity: 0.1; animation: letterGlow 0.8s ease-out forwards; }
 
-              .chroma-bar-gpu {
-                transform-origin: bottom;
-                will-change: transform, opacity;
-                transition: transform 55ms linear;
-              }
-
               input[type="range"] {
                 -webkit-appearance: none;
                 appearance: none;
-                background: rgba(88, 28, 135, 0.50);
-                height: 5px;
+                background: rgba(88, 28, 135, 0.55);
+                height: 6px;
                 border-radius: 999px;
                 outline: none;
               }
               input[type="range"]::-webkit-slider-thumb {
                 -webkit-appearance: none;
                 appearance: none;
-                width: 15px;
-                height: 15px;
+                width: 16px;
+                height: 16px;
                 border-radius: 50%;
                 background: #ffffff;
                 border: 2px solid #e879f9;
+                box-shadow: 0 0 10px #d946ef;
                 cursor: pointer;
               }
 
@@ -990,7 +1249,7 @@ jobs:
                   <span class="splash-letter" style="animation-delay: 0.50s">S</span>
                 </div>
                 <p class="belmont-thin text-[10px] text-fuchsia-300/90 uppercase mt-3 tracking-[0.45em] splash-letter" style="animation-delay: 0.65s">
-                  Belmont Edition • 2027
+                  Belmont Edition • Native Engine
                 </p>
                 <div class="w-48 h-1 rounded-full bg-purple-950 mt-8 overflow-hidden">
                   <div id="splashBar" class="h-full bg-gradient-to-r from-purple-600 via-fuchsia-400 to-white rounded-full transition-all duration-700" style="width: 15%"></div>
@@ -998,7 +1257,7 @@ jobs:
               </div>
             </div>
 
-            <!-- HEADER FLOTANTE 2027 -->
+            <!-- HEADER FLOTANTE -->
             <header class="sticky top-0 z-30 glass-bar px-4 py-3 flex items-center justify-between border-b border-fuchsia-500/20 rounded-b-3xl">
               <div class="flex items-center gap-3">
                 <div class="w-11 h-11 rounded-2xl bg-[#090314] border border-fuchsia-400/50 flex items-center justify-center shadow-[0_0_16px_rgba(217,70,239,0.35)] overflow-hidden">
@@ -1087,7 +1346,7 @@ jobs:
               <span>💡 Mantén presionada una canción para Compartir o Añadir a Playlist</span>
             </div>
 
-            <!-- CONTENEDOR PRINCIPAL DE BIBLIOTECA A 120 FPS -->
+            <!-- LISTA DE CANCIONES A 120 FPS -->
             <main id="libraryContainer" class="px-4 flex-1 space-y-2 overflow-y-auto"></main>
 
             <footer class="mt-6 mb-2 text-center pointer-events-none">
@@ -1101,13 +1360,10 @@ jobs:
                   <div class="flex items-center gap-3 flex-1 min-w-0 cursor-pointer" onclick="openModal('playerModal')">
                     <img id="miniCover" src="" class="w-[52px] h-[52px] cover-row object-cover bg-purple-950/60 shrink-0 shadow" />
                     <div class="min-w-0 flex-1">
-                      <div class="flex items-center gap-1.5">
-                        <h3 id="miniTitle" class="font-bold text-sm text-white truncate">Selecciona una pista</h3>
-                        <span id="miniChordBadge" class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-fuchsia-600 text-white border border-fuchsia-300/50 font-mono shrink-0">--</span>
-                      </div>
+                      <h3 id="miniTitle" class="font-bold text-sm text-white truncate">Selecciona una pista</h3>
                       <div class="flex items-center gap-2 mt-0.5">
-                        <p id="miniArtist" class="text-xs text-purple-200/75 truncate">COSMOS 2027</p>
-                        <span id="miniBpmBadge" class="text-[9px] font-mono text-fuchsia-300 bg-purple-950 px-1.5 py-0.2 rounded-full border border-purple-700/40 shrink-0">-- BPM</span>
+                        <p id="miniArtist" class="text-xs text-purple-200/75 truncate">COSMOS Native Hi-Fi</p>
+                        <span class="text-[9px] font-mono text-fuchsia-300 bg-purple-950 px-1.5 py-0.2 rounded-full border border-purple-700/40 shrink-0">HI-RES</span>
                       </div>
                     </div>
                   </div>
@@ -1122,131 +1378,103 @@ jobs:
                 </div>
                 <div class="mt-2 flex items-center gap-2 px-1">
                   <span id="miniCurrentTime" class="text-[10px] text-purple-300/70 w-7 font-mono">0:00</span>
-                  <input type="range" id="miniSeek" value="0" min="0" max="100" step="0.1" oninput="seekAudio(this.value)" class="flex-1" />
+                  <input type="range" id="miniSeek" value="0" min="0" max="100" step="0.1"
+                    oninput="onSeekDrag(this.value)"
+                    onchange="onSeekCommit(this.value)"
+                    class="flex-1" />
                   <span id="miniDuration" class="text-[10px] text-purple-300/70 w-7 text-right font-mono">0:00</span>
                 </div>
               </div>
             </div>
 
-            <!-- MODAL REPRODUCTOR COMPLETO 2027 -->
-            <div id="playerModal" class="fixed inset-0 z-50 cosmos-bg hidden flex-col justify-between p-4 sm:p-6 overflow-y-auto">
+            <!-- MODAL REPRODUCTOR COMPLETO 2027 (DISEÑO LIMPIO APPLE MUSIC / SPOTIFY) -->
+            <div id="playerModal" class="fixed inset-0 z-50 cosmos-bg hidden flex-col justify-between p-5 sm:p-7 overflow-y-auto">
               <div class="flex items-center justify-between relative z-10">
                 <button onclick="closeModal('playerModal')" class="w-10 h-10 rounded-full glass-pill text-purple-100 flex items-center justify-center active:scale-90">
                   <i class="fa-solid fa-chevron-down text-sm"></i>
                 </button>
                 <div class="text-center">
-                  <span class="digital-cosmos text-[10px] uppercase text-fuchsia-300 block">COSMOS 2027</span>
-                  <span id="fullAlbumName" class="text-xs font-semibold text-purple-200/90 truncate max-w-[200px] block">Álbum</span>
+                  <span class="digital-cosmos text-[10px] uppercase text-fuchsia-300 block">COSMOS HI-FI ENGINE</span>
+                  <span id="fullAlbumName" class="text-xs font-semibold text-purple-200/90 truncate max-w-[220px] block">Álbum</span>
                 </div>
                 <button onclick="openActionSheet(currentTrackIndex)" class="w-10 h-10 rounded-full glass-pill text-purple-100 flex items-center justify-center active:scale-90">
                   <i class="fa-solid fa-ellipsis-vertical text-sm"></i>
                 </button>
               </div>
 
-              <div class="flex-1 flex flex-col items-center justify-center space-y-4 my-2 relative">
+              <!-- PORTADA PROTAGONISTA DE ALTA RESOLUCION -->
+              <div class="flex-1 flex flex-col items-center justify-center my-4 relative">
                 <div class="relative flex items-center justify-center">
-                  <div class="absolute w-64 h-64 rounded-full bg-gradient-to-tr from-purple-700/35 via-fuchsia-500/30 to-pink-500/25 blur-2xl pointer-events-none"></div>
-                  <img id="fullCover" src="" oncontextmenu="openActionSheet(currentTrackIndex); return false;" class="relative z-10 w-60 h-60 sm:w-68 sm:h-68 cover-2027 object-cover bg-purple-950/50" />
+                  <div class="absolute w-72 h-72 rounded-full bg-gradient-to-tr from-purple-700/40 via-fuchsia-500/30 to-pink-500/25 blur-3xl pointer-events-none"></div>
+                  <img id="fullCover" src="" oncontextmenu="openActionSheet(currentTrackIndex); return false;" class="relative z-10 w-72 h-72 sm:w-80 sm:h-80 cover-2027 object-cover bg-purple-950/50" />
                 </div>
 
-                <!-- PANEL STUDIO DSP: DETECTOR DE ACORDES DE GUITARRA + METRONOMO AUTO-BPM -->
-                <div class="w-full max-w-md card-2027 rounded-3xl p-3.5 space-y-3 relative z-10">
-                  <div>
-                    <div class="flex items-center justify-between mb-1.5">
-                      <div class="flex items-center gap-2">
-                        <span class="w-2 h-2 rounded-full bg-fuchsia-400"></span>
-                        <span class="text-[10px] font-bold uppercase tracking-wider text-purple-100">Acordes de Guitarra en Vivo</span>
-                      </div>
-                      <button onclick="toggleChordMode()" id="chordModeBtn" class="px-3 py-0.5 rounded-full bg-purple-900 border border-fuchsia-400/50 text-[10px] text-purple-100 font-semibold">Tríadas (m/Maj)</button>
-                    </div>
-                    <div class="w-full bg-black/50 h-1.5 rounded-full overflow-hidden mb-2.5 border border-purple-900/40">
-                      <div id="measureLockBar" class="bg-gradient-to-r from-purple-600 via-fuchsia-400 to-white h-full rounded-full" style="width: 0%"></div>
-                    </div>
-                    <div class="grid grid-cols-3 gap-2 items-center text-center">
-                      <div class="p-2 rounded-2xl bg-black/45 border border-purple-800/40">
-                        <span class="text-[9px] uppercase tracking-wider text-purple-300/70 block">Compás Ant.</span>
-                        <span id="prevChordBox" class="text-base font-bold text-purple-200 font-mono">--</span>
-                      </div>
-                      <div class="p-2.5 rounded-2xl neon-chord-box transform scale-105">
-                        <span class="text-[9px] text-fuchsia-200 uppercase font-bold tracking-wider block">En Compás</span>
-                        <span id="currentChordBox" class="text-3xl font-extrabold text-white tracking-tight font-mono">--</span>
-                      </div>
-                      <div class="p-2 rounded-2xl bg-black/45 border border-purple-800/40">
-                        <span class="text-[9px] uppercase tracking-wider text-purple-300/70 block">5ta (Power)</span>
-                        <span id="nextChordBox" class="text-base font-bold text-purple-200 font-mono">--</span>
-                      </div>
-                    </div>
-                    <div class="mt-2.5">
-                      <div id="chromaBars" class="grid grid-cols-12 gap-1 h-8 items-end pt-1 px-2 bg-black/50 rounded-xl border border-purple-900/40"></div>
-                      <div class="grid grid-cols-12 gap-1 text-[9px] text-center text-purple-300/80 font-mono mt-1 font-semibold">
-                        <span>C</span><span>C#</span><span>D</span><span>D#</span><span>E</span><span>F</span><span>F#</span><span>G</span><span>G#</span><span>A</span><span>A#</span><span>B</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <!-- METRONOMO QUIRURGICO EN TIEMPO REAL -->
-                  <div class="pt-2.5 border-t border-purple-800/40 flex items-center justify-between gap-2">
-                    <div class="flex items-center gap-2">
-                      <div class="px-3 py-1 rounded-xl bg-black/55 border border-fuchsia-500/40 text-center min-w-[74px]">
-                        <span id="bpmValueDisplay" class="text-base font-extrabold text-fuchsia-300 font-mono leading-none">120</span>
-                        <span class="text-[8px] uppercase text-purple-300 block">BPM Auto</span>
-                      </div>
-                      <div class="flex items-center gap-1.5 px-2.5 py-2 rounded-xl bg-black/40 border border-purple-900/40">
-                        <span id="beat-0" class="w-2.5 h-2.5 rounded-full bg-purple-900 border border-purple-500/40"></span>
-                        <span id="beat-1" class="w-2.5 h-2.5 rounded-full bg-purple-900 border border-purple-500/40"></span>
-                        <span id="beat-2" class="w-2.5 h-2.5 rounded-full bg-purple-900 border border-purple-500/40"></span>
-                        <span id="beat-3" class="w-2.5 h-2.5 rounded-full bg-purple-900 border border-purple-500/40"></span>
-                      </div>
-                    </div>
-                    <div class="flex items-center gap-1">
-                      <button onclick="adjustBpm(-1)" class="w-7 h-7 rounded-full glass-pill text-xs text-purple-200 font-bold active:scale-90">-</button>
-                      <button onclick="adjustBpm(1)" class="w-7 h-7 rounded-full glass-pill text-xs text-purple-200 font-bold active:scale-90">+</button>
-                      <button onclick="tapTempo()" class="px-2.5 h-7 rounded-full glass-pill text-[10px] text-purple-200 font-mono uppercase active:scale-90">Tap</button>
-                      <button onclick="toggleMetronomeSound()" id="metroSoundBtn" class="px-3 h-7 rounded-full glass-pill text-[10px] text-purple-200 font-semibold flex items-center gap-1 active:scale-90">
-                        <i class="fa-solid fa-volume-xmark" id="metroIcon"></i> Clic
-                      </button>
-                    </div>
-                  </div>
+                <!-- PILDORA DE AUDIO DIRECTO BLUETOOTH / STUDIO -->
+                <div class="mt-5 px-4 py-1.5 rounded-full glass-pill flex items-center gap-2.5 text-[10px] text-fuchsia-200 font-mono">
+                  <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+                  <span>MOTOR NATIVO DIRECTO • 24-BIT / BLUETOOTH LOCK</span>
                 </div>
               </div>
 
-              <!-- Info de Pista + Botones Rápidos -->
-              <div class="space-y-3 pt-1 relative z-10">
+              <!-- CONTROLES E INFORMACION DE LA PISTA -->
+              <div class="space-y-4 pt-1 relative z-10">
                 <div class="flex items-center justify-between gap-2">
                   <div class="min-w-0 flex-1">
-                    <h2 id="fullTitle" class="text-lg sm:text-xl font-extrabold text-white truncate">Sin canción</h2>
-                    <p id="fullArtist" class="text-xs sm:text-sm text-fuchsia-200/80 truncate">--</p>
+                    <h2 id="fullTitle" class="text-xl sm:text-2xl font-extrabold text-white truncate">Sin canción</h2>
+                    <p id="fullArtist" class="text-sm text-fuchsia-200/85 truncate mt-0.5">--</p>
                   </div>
                   <div class="flex items-center gap-1.5 shrink-0">
-                    <button onclick="toggleLikeCurrent()" id="fullLikeBtn" class="w-9 h-9 rounded-full glass-pill flex items-center justify-center text-purple-200 active:scale-90">
+                    <button onclick="toggleLikeCurrent()" id="fullLikeBtn" class="w-10 h-10 rounded-full glass-pill flex items-center justify-center text-purple-200 active:scale-90">
                       <i class="fa-regular fa-heart text-base"></i>
                     </button>
-                    <button onclick="openAddToPlaylistModal(currentTrackIndex)" class="w-9 h-9 rounded-full glass-pill flex items-center justify-center text-purple-200 active:scale-90" title="Añadir a Playlist">
+                    <button onclick="openAddToPlaylistModal(currentTrackIndex)" class="w-10 h-10 rounded-full glass-pill flex items-center justify-center text-purple-200 active:scale-90" title="Añadir a Playlist">
                       <i class="fa-solid fa-folder-plus text-sm text-fuchsia-300"></i>
                     </button>
-                    <button onclick="shareTrack(currentTrackIndex)" class="w-9 h-9 rounded-full glass-pill flex items-center justify-center text-purple-200 active:scale-90" title="Compartir">
+                    <button onclick="shareTrack(currentTrackIndex)" class="w-10 h-10 rounded-full glass-pill flex items-center justify-center text-purple-200 active:scale-90" title="Compartir">
                       <i class="fa-solid fa-share-nodes text-sm text-fuchsia-300"></i>
                     </button>
-                    <button onclick="openModal('eqModal')" id="fullGenreBadge" class="px-3 py-1.5 rounded-full text-[10px] glass-pill text-fuchsia-200 font-mono font-bold">
+                    <button onclick="openModal('eqModal')" id="fullGenreBadge" class="px-3.5 py-2 rounded-full text-[10px] glass-pill text-fuchsia-200 font-mono font-bold">
                       EQ: Space Rock
                     </button>
                   </div>
                 </div>
 
+                <!-- BARRA DE PROGRESO ULTRA PRECISA (FUNCIONA EN PLAY Y EN PAUSA) -->
                 <div>
-                  <input type="range" id="fullSeek" value="0" min="0" max="100" step="0.1" oninput="seekAudio(this.value)" class="w-full" />
-                  <div class="flex justify-between text-[11px] text-purple-300/75 mt-1 font-mono">
+                  <input type="range" id="fullSeek" value="0" min="0" max="100" step="0.1"
+                    oninput="onSeekDrag(this.value)"
+                    onchange="onSeekCommit(this.value)"
+                    class="w-full" />
+                  <div class="flex justify-between text-xs text-purple-300/80 mt-1.5 font-mono">
                     <span id="fullCurrentTime">0:00</span>
                     <span id="fullDuration">0:00</span>
                   </div>
                 </div>
 
-                <div class="flex items-center justify-between px-2 pt-1">
-                  <button onclick="toggleShuffle()" id="shuffleBtn" class="w-10 h-10 rounded-full flex items-center justify-center text-purple-400/50 active:scale-90"><i class="fa-solid fa-shuffle text-base"></i></button>
-                  <button onclick="prevTrack()" class="w-12 h-12 rounded-full glass-pill flex items-center justify-center text-white text-lg active:scale-90"><i class="fa-solid fa-backward-step"></i></button>
-                  <button onclick="togglePlay()" id="fullPlayBtn" class="w-16 h-16 rounded-full bg-gradient-to-tr from-purple-600 via-fuchsia-500 to-pink-500 text-white flex items-center justify-center text-2xl shadow-[0_0_24px_rgba(217,70,239,0.6)] active:scale-95"><i class="fa-solid fa-play"></i></button>
-                  <button onclick="nextTrack()" class="w-12 h-12 rounded-full glass-pill flex items-center justify-center text-white text-lg active:scale-90"><i class="fa-solid fa-forward-step"></i></button>
-                  <button onclick="cycleRepeat()" id="repeatBtn" class="w-10 h-10 rounded-full flex items-center justify-center text-purple-400/50 relative active:scale-90"><i class="fa-solid fa-repeat text-base"></i><span id="repeatOneBadge" class="hidden absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full bg-fuchsia-400 text-[10px] font-bold text-black flex items-center justify-center">1</span></button>
+                <!-- CONTROLES CON BOTONES -10s y +10s PARA REGRESAR O ADELANTAR TANTITO -->
+                <div class="flex items-center justify-between px-1 pt-1">
+                  <button onclick="toggleShuffle()" id="shuffleBtn" class="w-9 h-9 rounded-full flex items-center justify-center text-purple-400/50 active:scale-90">
+                    <i class="fa-solid fa-shuffle text-sm"></i>
+                  </button>
+                  <button onclick="seekDelta(-10000)" class="px-2.5 py-1.5 rounded-full glass-pill text-[11px] font-mono font-bold text-purple-200 active:scale-90">
+                    -10s
+                  </button>
+                  <button onclick="prevTrack()" class="w-12 h-12 rounded-full glass-pill flex items-center justify-center text-white text-lg active:scale-90">
+                    <i class="fa-solid fa-backward-step"></i>
+                  </button>
+                  <button onclick="togglePlay()" id="fullPlayBtn" class="w-16 h-16 rounded-full bg-gradient-to-tr from-purple-600 via-fuchsia-500 to-pink-500 text-white flex items-center justify-center text-2xl shadow-[0_0_28px_rgba(217,70,239,0.65)] active:scale-95">
+                    <i class="fa-solid fa-play"></i>
+                  </button>
+                  <button onclick="nextTrack()" class="w-12 h-12 rounded-full glass-pill flex items-center justify-center text-white text-lg active:scale-90">
+                    <i class="fa-solid fa-forward-step"></i>
+                  </button>
+                  <button onclick="seekDelta(10000)" class="px-2.5 py-1.5 rounded-full glass-pill text-[11px] font-mono font-bold text-purple-200 active:scale-90">
+                    +10s
+                  </button>
+                  <button onclick="cycleRepeat()" id="repeatBtn" class="w-9 h-9 rounded-full flex items-center justify-center text-purple-400/50 relative active:scale-90">
+                    <i class="fa-solid fa-repeat text-sm"></i>
+                    <span id="repeatOneBadge" class="hidden absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full bg-fuchsia-400 text-[10px] font-bold text-black flex items-center justify-center">1</span>
+                  </button>
                 </div>
               </div>
             </div>
@@ -1283,7 +1511,7 @@ jobs:
               </div>
             </div>
 
-            <!-- MODAL SELECCIONAR / AÑADIR A PLAYLIST -->
+            <!-- MODAL AÑADIR A PLAYLIST -->
             <div id="addToPlaylistModal" class="fixed inset-0 z-[75] bg-black/80 hidden items-center justify-center p-4">
               <div class="card-2027 rounded-3xl w-full max-w-md p-5 space-y-4">
                 <div class="flex justify-between items-center border-b border-purple-800/40 pb-2.5">
@@ -1306,7 +1534,7 @@ jobs:
                 </div>
                 <div>
                   <label class="text-xs text-purple-300/80 block mb-1.5">Nombre de tu Playlist</label>
-                  <input type="text" id="newPlaylistNameInput" placeholder="Ej. Noche Gótica, Gym, Favoritas de Ale..." class="w-full p-3 rounded-2xl bg-purple-950 border border-purple-600/50 text-sm text-white focus:outline-none focus:border-fuchsia-400" />
+                  <input type="text" id="newPlaylistNameInput" placeholder="Ej. Noche Gótica, Gym, Ruta Cupra..." class="w-full p-3 rounded-2xl bg-purple-950 border border-purple-600/50 text-sm text-white focus:outline-none focus:border-fuchsia-400" />
                 </div>
                 <div class="flex justify-end gap-2 pt-1">
                   <button onclick="closeModal('createPlaylistModal')" class="px-4 py-2 rounded-full glass-pill text-purple-300 text-xs">Cancelar</button>
@@ -1337,11 +1565,11 @@ jobs:
               </div>
             </div>
 
-            <!-- MODAL ECUALIZADOR DE 16 GENEROS -->
+            <!-- MODAL ECUALIZADOR HARDWARE DE 16 GENEROS -->
             <div id="eqModal" class="fixed inset-0 z-[75] bg-black/85 hidden items-center justify-center p-4">
               <div class="card-2027 rounded-3xl w-full max-w-md p-5 space-y-4 max-h-[90vh] overflow-y-auto">
                 <div class="flex justify-between items-center border-b border-purple-800/40 pb-2">
-                  <h3 class="font-bold text-sm text-purple-100">Ecualizador Master DSP (16 Géneros)</h3>
+                  <h3 class="font-bold text-sm text-purple-100">Ecualizador Hardware Nativo (16 Géneros)</h3>
                   <button onclick="closeModal('eqModal')" class="text-purple-400"><i class="fa-solid fa-xmark"></i></button>
                 </div>
                 <div id="eqPresetContainer" class="grid grid-cols-4 gap-1.5"></div>
@@ -1376,8 +1604,6 @@ jobs:
               Listo
             </div>
 
-            <audio id="audioElement" preload="auto" crossorigin="anonymous"></audio>
-
             <script>
               window.defaultLogoDataUri = "data:image/svg+xml;utf8," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300"><rect width="300" height="300" fill="#06020d"/><circle cx="150" cy="150" r="110" fill="none" stroke="#a855f7" stroke-width="3" opacity="0.5"/><path d="M80 138 A72 72 0 0 1 220 138" fill="none" stroke="#f0abfc" stroke-width="6" stroke-linecap="round"/><polygon points="150,55 88,168 122,168 150,108" fill="#f5d0fe"/><polygon points="150,55 212,168 178,168 150,108" fill="#a855f7"/><polygon points="124,162 150,235 176,162 150,184" fill="#c084fc"/><polygon points="150,122 162,146 150,170 138,146" fill="#ffffff"/></svg>`);
 
@@ -1393,7 +1619,8 @@ jobs:
 
               let currentTab = "songs", currentTrackIndex = -1, actionSheetTrackIdx = -1, pendingAddTrackIdx = -1;
               let activePlaylistViewId = null;
-              let isPlaying = false, isPlayerModalOpen = false, shuffleMode = false, repeatMode = 0;
+              let isPlaying = false, isDraggingSeek = false, currentDurationSec = 0;
+              let shuffleMode = false, repeatMode = 0;
               let activePresetName = "Space Rock", sleepTimerId = null;
 
               function showToast(msg) {
@@ -1445,8 +1672,11 @@ jobs:
               window.onNativeLibraryLoaded = function(jsonArray) {
                 try {
                   const list = typeof jsonArray === "string" ? JSON.parse(jsonArray) : jsonArray;
-                  tracks = list.map(item => {
+                  tracks = list.map((item, idx) => {
                     const saved = customOverrides[item.id] || {};
+                    if (saved.title && window.CosmosNative) {
+                      window.CosmosNative.updateTrackMetadata(idx, saved.title, saved.artist || item.artist, saved.album || item.album);
+                    }
                     return {
                       id: item.id,
                       mediaId: item.mediaId || 0,
@@ -1456,30 +1686,48 @@ jobs:
                       albumId: item.albumId !== undefined ? item.albumId : -1,
                       durationMs: item.durationMs || 0,
                       thumb: saved.cover || item.thumb || item.cover || "ic_launcher.png",
-                      cover: saved.cover || item.cover || "ic_launcher.png",
-                      audioUrl: item.audioUrl
+                      cover: saved.cover || item.cover || "ic_launcher.png"
                     };
                   });
                   updateBentoCounters();
                   renderLibrary();
-                  if (tracks.length > 0 && currentTrackIndex === -1) loadTrack(0, false);
                 } catch(e) {}
+              };
+
+              // Sincronizacion instantanea desde el MediaPlayer nativo de Kotlin
+              window.onNativeTrackState = function(idx, playing, posMs, durMs) {
+                if (idx < 0 || idx >= tracks.length) return;
+                const prevIdx = currentTrackIndex;
+                currentTrackIndex = idx;
+                isPlaying = playing;
+                const t = tracks[idx];
+                setImageWithFallback(document.getElementById("miniCover"), t.thumb);
+                setImageWithFallback(document.getElementById("fullCover"), t.cover);
+                document.getElementById("miniTitle").textContent = t.title;
+                document.getElementById("miniArtist").textContent = t.artist;
+                document.getElementById("fullTitle").textContent = t.title;
+                document.getElementById("fullArtist").textContent = t.artist;
+                document.getElementById("fullAlbumName").textContent = t.album;
+                updatePlayButtons(playing);
+                updateLikeButtonsUI();
+                highlightActiveRow(prevIdx, idx);
+                currentDurationSec = (durMs || t.durationMs || 0) / 1000;
+                if (!isDraggingSeek) {
+                  updateTimeUI((posMs || 0) / 1000, currentDurationSec);
+                }
+              };
+
+              window.onNativeProgress = function(posMs, durMs, playing) {
+                isPlaying = playing;
+                updatePlayButtons(playing);
+                currentDurationSec = (durMs || 0) / 1000;
+                if (!isDraggingSeek) {
+                  updateTimeUI((posMs || 0) / 1000, currentDurationSec);
+                }
               };
 
               function rescanPhoneLibrary() { if(window.CosmosNative) window.CosmosNative.rescanMediaStore(); }
 
-              function notifyNativeAndroidService() {
-                if(window.CosmosNative && currentTrackIndex >= 0 && tracks[currentTrackIndex]) {
-                  const t = tracks[currentTrackIndex];
-                  const durMs = Math.round((audioEl.duration || (t.durationMs / 1000) || 0) * 1000);
-                  const posMs = Math.round((audioEl.currentTime || 0) * 1000);
-                  window.CosmosNative.updateNotification(t.title, t.artist, t.album, t.albumId || -1, durMs, posMs, isPlaying);
-                }
-              }
-
-              // =========================================================================
-              // SISTEMA DE ME GUSTA (ACTUALIZACION O(1) SIN RE-RENDERIZAR TODA LA LISTA)
-              // =========================================================================
               function isTrackLiked(trackId) {
                 return likedTrackIds.includes(trackId);
               }
@@ -1501,7 +1749,6 @@ jobs:
                 updateLikeButtonsUI();
                 updateBentoCounters();
 
-                // Actualizar solo el boton de esa fila sin reconstruir el DOM
                 const rowHeartBtn = document.getElementById(`row-like-btn-${idx}`);
                 if (rowHeartBtn) {
                   rowHeartBtn.className = `w-8 h-8 rounded-full flex items-center justify-center ${nowLiked ? 'text-pink-500' : 'text-purple-300/50'}`;
@@ -1570,8 +1817,6 @@ jobs:
                 if (!t) return;
                 if (window.CosmosNative && window.CosmosNative.shareTrackNative) {
                   window.CosmosNative.shareTrackNative(t.mediaId || 0, t.title, t.artist, t.album);
-                } else if (navigator.share) {
-                  navigator.share({ title: t.title, text: `🎵 Escuchando "${t.title}" de ${t.artist} en COSMOS` }).catch(()=>{});
                 }
               }
 
@@ -1660,295 +1905,11 @@ jobs:
               function playRandomMix() {
                 if (!tracks.length) return;
                 shuffleMode = true;
-                document.getElementById("shuffleBtn").className = "w-10 h-10 rounded-full flex items-center justify-center text-fuchsia-400";
+                document.getElementById("shuffleBtn").className = "w-9 h-9 rounded-full flex items-center justify-center text-fuchsia-400";
+                if (window.CosmosNative) window.CosmosNative.setShuffleAndRepeat(shuffleMode, repeatMode);
                 const rnd = Math.floor(Math.random() * tracks.length);
                 loadTrack(rnd, true);
                 showToast("🔀 Mix Cosmos Activado");
-              }
-
-              // =========================================================================
-              // MOTOR DE AUDIO TURBO (TABLA LUT PRECALCULADA + HIBERNACION EN BLUETOOTH)
-              // =========================================================================
-              let audioCtx = null, analyser = null, mediaSource = null, masterGainNode = null, isSourceConnected = false, eqFilters = [];
-              let chordDetectionMode = "triad";
-              const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-              let smoothedRoot = new Float32Array(12), smoothedChroma = new Float32Array(12);
-              let fftDbBuffer = null, chromaBarEls = [];
-              let binPitchLut = null, binRootWeightLut = null, minGuitarBin = 2, maxGuitarBin = 100;
-              let lockedPitch = -1, lockedQuality = "", prevChordName = "--", lockTime = 0, challenger = -1, challengerCount = 0;
-              const HOLD_MS = 1350;
-              const audioEl = document.getElementById("audioElement");
-
-              let detectedBpm = 120, prevLowEnergy = 0, lastPeakTime = 0;
-              let onsetIntervals = [], tapTimes = [];
-              let metronomeSoundEnabled = false, currentBeatIndex = 0, nextBeatTime = 0;
-
-              window.setDuckVolume = function(val) {
-                if (masterGainNode && audioCtx) {
-                  masterGainNode.gain.setTargetAtTime(val, audioCtx.currentTime, 0.08);
-                } else {
-                  audioEl.volume = val;
-                }
-              };
-
-              function buildFastGuitarLookupTable(sampleRate, fftSize) {
-                const binCount = fftSize / 2;
-                const binW = sampleRate / fftSize;
-                binPitchLut = new Int8Array(binCount);
-                binRootWeightLut = new Float32Array(binCount);
-                minGuitarBin = Math.max(2, Math.floor(65 / binW));
-                maxGuitarBin = Math.min(binCount - 3, Math.ceil(780 / binW));
-
-                for (let b = minGuitarBin; b <= maxGuitarBin; b++) {
-                  const freq = b * binW;
-                  const p = ((Math.round(12 * Math.log2(freq / 440) + 69) % 12) + 12) % 12;
-                  binPitchLut[b] = p;
-                  if (freq >= 78 && freq <= 400) {
-                    binRootWeightLut[b] = freq < 220 ? 1.75 : 1.25;
-                  } else {
-                    binRootWeightLut[b] = 0;
-                  }
-                }
-              }
-
-              function initAudioEngine() {
-                if (!audioCtx) {
-                  try {
-                    const AC = window.AudioContext || window.webkitAudioContext;
-                    audioCtx = new AC({ latencyHint: "playback", sampleRate: 48000 });
-                    analyser = audioCtx.createAnalyser();
-                    analyser.fftSize = 2048;
-                    analyser.smoothingTimeConstant = 0.80;
-                    masterGainNode = audioCtx.createGain();
-                    masterGainNode.gain.value = 1.0;
-                    fftDbBuffer = new Float32Array(analyser.frequencyBinCount);
-                    buildFastGuitarLookupTable(audioCtx.sampleRate, analyser.fftSize);
-                  } catch (e) {}
-                }
-                if (audioCtx && audioCtx.state === "suspended") {
-                  audioCtx.resume();
-                }
-                if (!isSourceConnected && audioEl && audioCtx) {
-                  try {
-                    mediaSource = audioCtx.createMediaElementSource(audioEl);
-                    const freqs = [60, 230, 910, 3600, 14000];
-                    const initialGains = eqPresets[activePresetName] || [0,0,0,0,0];
-                    eqFilters = freqs.map((f, i) => {
-                      const filter = audioCtx.createBiquadFilter();
-                      filter.type = "peaking";
-                      filter.frequency.value = f;
-                      filter.gain.value = initialGains[i];
-                      filter.Q.value = 1.0;
-                      return filter;
-                    });
-                    let curr = mediaSource;
-                    eqFilters.forEach(f => { curr.connect(f); curr = f; });
-                    curr.connect(analyser);
-                    analyser.connect(masterGainNode);
-                    masterGainNode.connect(audioCtx.destination);
-                    isSourceConnected = true;
-                  } catch (e) {
-                    isSourceConnected = true;
-                  }
-                }
-              }
-
-              // Vigilante Bluetooth: mantiene el AudioContext despierto con 0% de carga de CPU
-              setInterval(() => {
-                if (isPlaying && audioCtx && audioCtx.state === "suspended") {
-                  audioCtx.resume();
-                }
-              }, 2000);
-
-              // Analizador DSP Inteligente: SOLO corre cuando el reproductor grande esta abierto y visible
-              setInterval(() => {
-                if (!isPlaying || !isPlayerModalOpen || document.hidden || !analyser || !audioCtx || !fftDbBuffer || !binPitchLut) return;
-
-                analyser.getFloatFrequencyData(fftDbBuffer);
-                const instRoot = new Float32Array(12);
-                const instChroma = new Float32Array(12);
-                let lowRhythmEnergy = 0;
-
-                for (let b = minGuitarBin; b <= maxGuitarBin; b++) {
-                  const db = fftDbBuffer[b];
-                  if (db > -74) {
-                    const mag = Math.pow(10, db * 0.05);
-                    if (b < minGuitarBin + 8) lowRhythmEnergy += mag;
-                    if (db >= fftDbBuffer[b - 1] && db >= fftDbBuffer[b + 1]) {
-                      const p = binPitchLut[b];
-                      instChroma[p] += mag;
-                      const rw = binRootWeightLut[b];
-                      if (rw > 0) instRoot[p] += mag * rw;
-                    }
-                  }
-                }
-
-                const now = performance.now();
-                if (lowRhythmEnergy > prevLowEnergy * 1.38 && lowRhythmEnergy > 0.012 && (now - lastPeakTime) > 260) {
-                  const interval = now - lastPeakTime;
-                  lastPeakTime = now;
-                  if (interval >= 320 && interval <= 1050) {
-                    let candidateBpm = 60000 / interval;
-                    while (candidateBpm < 75) candidateBpm *= 2;
-                    while (candidateBpm > 165) candidateBpm /= 2;
-                    onsetIntervals.push(candidateBpm);
-                    if (onsetIntervals.length > 10) onsetIntervals.shift();
-                    if (onsetIntervals.length >= 4) {
-                      const sorted = [...onsetIntervals].sort((a, b) => a - b);
-                      const median = sorted[Math.floor(sorted.length / 2)];
-                      detectedBpm = Math.round(detectedBpm * 0.85 + median * 0.15);
-                      updateBpmUI();
-                    }
-                  }
-                }
-                prevLowEnergy = lowRhythmEnergy * 0.75 + prevLowEnergy * 0.25;
-
-                let sig = 0;
-                for (let i = 0; i < 12; i++) {
-                  smoothedRoot[i] = smoothedRoot[i] * 0.80 + instRoot[i] * 0.20;
-                  smoothedChroma[i] = smoothedChroma[i] * 0.78 + instChroma[i] * 0.22;
-                  sig += smoothedRoot[i];
-                }
-
-                let maxR = 0.00001;
-                for (let i = 0; i < 12; i++) if (smoothedRoot[i] > maxR) maxR = smoothedRoot[i];
-
-                for (let i = 0; i < 12; i++) {
-                  const bar = chromaBarEls[i];
-                  if (bar) {
-                    const scale = Math.max(0.12, smoothedRoot[i] / maxR);
-                    bar.style.transform = `scaleY(${scale.toFixed(2)})`;
-                    bar.style.opacity = i === lockedPitch ? "1" : "0.42";
-                  }
-                }
-
-                if (sig > 0.0012) {
-                  let bestIdx = 0;
-                  for (let i = 1; i < 12; i++) if (smoothedRoot[i] > smoothedRoot[bestIdx]) bestIdx = i;
-
-                  const elapsed = now - lockTime;
-                  const barElem = document.getElementById("measureLockBar");
-                  if (barElem) barElem.style.width = `${Math.min(100, Math.round((elapsed / HOLD_MS) * 100))}%`;
-
-                  if (lockedPitch === -1) {
-                    lockChord(bestIdx, now);
-                  } else if (bestIdx !== lockedPitch) {
-                    if (smoothedRoot[bestIdx] > smoothedRoot[lockedPitch] * (elapsed < HOLD_MS ? 1.35 : 1.14)) {
-                      if (challenger === bestIdx) challengerCount++; else { challenger = bestIdx; challengerCount = 1; }
-                      if (challengerCount >= 4) lockChord(bestIdx, now);
-                    } else {
-                      challengerCount = Math.max(0, challengerCount - 1);
-                    }
-                  } else {
-                    challengerCount = 0;
-                  }
-                }
-              }, 65);
-
-              // Reloj del Metronomo: solo actualiza LEDs si el reproductor grande esta abierto o el clic sonoro activo
-              setInterval(() => {
-                if (!isPlaying || (!isPlayerModalOpen && !metronomeSoundEnabled)) return;
-                const now = performance.now();
-                const beatIntervalMs = 60000 / Math.max(40, Math.min(220, detectedBpm));
-                if (now >= nextBeatTime) {
-                  nextBeatTime = now + beatIntervalMs;
-                  currentBeatIndex = (currentBeatIndex + 1) % 4;
-                  if (isPlayerModalOpen && !document.hidden) {
-                    for (let i = 0; i < 4; i++) {
-                      const led = document.getElementById(`beat-${i}`);
-                      if (led) {
-                        led.className = i === currentBeatIndex
-                          ? (i === 0 ? "w-2.5 h-2.5 rounded-full bg-white border border-fuchsia-300 shadow-[0_0_8px_#fff] scale-125" : "w-2.5 h-2.5 rounded-full bg-fuchsia-400 border border-fuchsia-200 scale-110")
-                          : "w-2.5 h-2.5 rounded-full bg-purple-950 border border-purple-600/40";
-                      }
-                    }
-                  }
-                  if (metronomeSoundEnabled && audioCtx) {
-                    playMetronomeClick(currentBeatIndex === 0);
-                  }
-                }
-              }, 30);
-
-              function playMetronomeClick(isAccent) {
-                try {
-                  const osc = audioCtx.createOscillator();
-                  const gain = audioCtx.createGain();
-                  osc.type = "triangle";
-                  osc.frequency.setValueAtTime(isAccent ? 1200 : 850, audioCtx.currentTime);
-                  gain.gain.setValueAtTime(0.22, audioCtx.currentTime);
-                  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.045);
-                  osc.connect(gain);
-                  gain.connect(audioCtx.destination);
-                  osc.start(audioCtx.currentTime);
-                  osc.stop(audioCtx.currentTime + 0.05);
-                } catch (e) {}
-              }
-
-              function toggleMetronomeSound() {
-                initAudioEngine();
-                metronomeSoundEnabled = !metronomeSoundEnabled;
-                const btn = document.getElementById("metroSoundBtn");
-                const icon = document.getElementById("metroIcon");
-                if (metronomeSoundEnabled) {
-                  btn.className = "px-3 h-7 rounded-full bg-fuchsia-600 border border-fuchsia-300 text-[10px] text-white font-bold flex items-center gap-1";
-                  icon.className = "fa-solid fa-volume-high";
-                } else {
-                  btn.className = "px-3 h-7 rounded-full glass-pill text-[10px] text-purple-200 font-semibold flex items-center gap-1";
-                  icon.className = "fa-solid fa-volume-xmark";
-                }
-              }
-
-              function adjustBpm(delta) {
-                detectedBpm = Math.max(40, Math.min(220, detectedBpm + delta));
-                updateBpmUI();
-              }
-
-              function tapTempo() {
-                const now = performance.now();
-                tapTimes.push(now);
-                if (tapTimes.length > 5) tapTimes.shift();
-                if (tapTimes.length >= 2) {
-                  let sum = 0;
-                  for (let i = 1; i < tapTimes.length; i++) sum += (tapTimes[i] - tapTimes[i - 1]);
-                  const avg = sum / (tapTimes.length - 1);
-                  if (avg > 250 && avg < 1500) {
-                    detectedBpm = Math.round(60000 / avg);
-                    updateBpmUI();
-                  }
-                }
-              }
-
-              function updateBpmUI() {
-                document.getElementById("bpmValueDisplay").textContent = detectedBpm;
-                document.getElementById("miniBpmBadge").textContent = `${detectedBpm} BPM`;
-              }
-
-              function lockChord(pitch, now) {
-                if(lockedPitch !== -1) prevChordName = formatChord(lockedPitch, lockedQuality);
-                lockedPitch = pitch; lockTime = now; challengerCount = 0;
-                const min3 = smoothedChroma[(pitch + 3) % 12];
-                const maj3 = smoothedChroma[(pitch + 4) % 12];
-                lockedQuality = min3 > maj3 * 1.12 ? "m" : "";
-                renderChordUI();
-              }
-
-              function formatChord(p, q) {
-                if(p < 0) return "--";
-                return chordDetectionMode === "power" ? NOTE_NAMES[p] + "5" : NOTE_NAMES[p] + q;
-              }
-
-              function renderChordUI() {
-                const cur = formatChord(lockedPitch, lockedQuality);
-                document.getElementById("miniChordBadge").textContent = cur;
-                document.getElementById("currentChordBox").textContent = cur;
-                document.getElementById("prevChordBox").textContent = prevChordName;
-                document.getElementById("nextChordBox").textContent = `${NOTE_NAMES[lockedPitch]}5 (${NOTE_NAMES[(lockedPitch + 7) % 12]})`;
-              }
-
-              function toggleChordMode() {
-                chordDetectionMode = chordDetectionMode === "power" ? "triad" : "power";
-                document.getElementById("chordModeBtn").textContent = chordDetectionMode === "power" ? "Power / 5ta" : "Tríadas (m/Maj)";
-                if(lockedPitch !== -1) renderChordUI();
               }
 
               function applyEqPreset(name) {
@@ -1959,18 +1920,22 @@ jobs:
                 gains.forEach((val, idx) => {
                   const slider = document.getElementById(`eq-${idx}`);
                   if (slider) slider.value = val;
-                  updateEqBand(idx, val);
+                  const valLabel = document.getElementById(`eq-val-${idx}`);
+                  if (valLabel) valLabel.textContent = (val > 0 ? "+" : "") + val + "dB";
                 });
+                if (window.CosmosNative) {
+                  window.CosmosNative.setEqPresetGains(gains[0], gains[1], gains[2], gains[3], gains[4]);
+                }
                 renderEqButtons();
               }
 
               function updateEqBand(index, val) {
-                initAudioEngine();
-                if (eqFilters && eqFilters[index]) {
-                  eqFilters[index].gain.value = parseFloat(val);
-                }
+                const dbVal = parseInt(val, 10) || 0;
                 const valLabel = document.getElementById(`eq-val-${index}`);
-                if (valLabel) valLabel.textContent = (val > 0 ? "+" : "") + val + "dB";
+                if (valLabel) valLabel.textContent = (dbVal > 0 ? "+" : "") + dbVal + "dB";
+                if (window.CosmosNative) {
+                  window.CosmosNative.setEqBand(index, dbVal);
+                }
               }
 
               function setImageWithFallback(imgEl, srcUrl) {
@@ -1981,7 +1946,6 @@ jobs:
                 imgEl.src = srcUrl || "ic_launcher.png";
               }
 
-              // Cambio de pista ultra rapido O(1) sin reconstruir toda la lista del DOM
               function highlightActiveRow(prevIdx, newIdx) {
                 if (prevIdx >= 0) {
                   const oldRow = document.getElementById(`song-row-${prevIdx}`);
@@ -1997,47 +1961,55 @@ jobs:
                 }
               }
 
-              function loadTrack(idx, autoPlay=false) {
-                if(idx < 0 || idx >= tracks.length) return;
-                const prevIdx = currentTrackIndex;
-                currentTrackIndex = idx;
-                const t = tracks[idx];
-                lockedPitch = -1; prevChordName = "--"; onsetIntervals = [];
-                setImageWithFallback(document.getElementById("miniCover"), t.thumb);
-                setImageWithFallback(document.getElementById("fullCover"), t.cover);
-                document.getElementById("miniTitle").textContent = t.title;
-                document.getElementById("miniArtist").textContent = t.artist;
-                document.getElementById("fullTitle").textContent = t.title;
-                document.getElementById("fullArtist").textContent = t.artist;
-                document.getElementById("fullAlbumName").textContent = t.album;
-                audioEl.src = t.audioUrl;
-                audioEl.load();
-                updateLikeButtonsUI();
-                highlightActiveRow(prevIdx, idx);
-                notifyNativeAndroidService();
-                if(autoPlay) playAudio();
+              function loadTrack(idx, autoPlay = false) {
+                if (idx < 0 || idx >= tracks.length) return;
+                if (window.CosmosNative) {
+                  window.CosmosNative.loadTrack(idx, autoPlay);
+                }
               }
 
               function togglePlay() {
-                if(!tracks.length) { rescanPhoneLibrary(); return; }
-                initAudioEngine();
-                isPlaying ? pauseAudio() : playAudio();
+                if (!tracks.length) { rescanPhoneLibrary(); return; }
+                if (window.CosmosNative) window.CosmosNative.togglePlay();
               }
 
               function playAudio() {
-                initAudioEngine();
-                isPlaying = true;
-                nextBeatTime = performance.now();
-                updatePlayButtons(true);
-                audioEl.play().catch(()=>{});
-                notifyNativeAndroidService();
+                if (window.CosmosNative) window.CosmosNative.playAudio();
               }
 
               function pauseAudio() {
-                isPlaying = false;
-                updatePlayButtons(false);
-                audioEl.pause();
-                notifyNativeAndroidService();
+                if (window.CosmosNative) window.CosmosNative.pauseAudio();
+              }
+
+              function prevTrack() {
+                if (window.CosmosNative) window.CosmosNative.prevTrack();
+              }
+
+              function nextTrack() {
+                if (window.CosmosNative) window.CosmosNative.nextTrack();
+              }
+
+              function seekDelta(deltaMs) {
+                if (window.CosmosNative) window.CosmosNative.seekByDeltaMs(deltaMs);
+              }
+
+              function onSeekDrag(val) {
+                isDraggingSeek = true;
+                const pct = parseFloat(val) || 0;
+                document.getElementById("miniSeek").value = pct;
+                document.getElementById("fullSeek").value = pct;
+                const previewSec = (pct / 100) * currentDurationSec;
+                const fmt = s => `${Math.floor(s/60)}:${Math.floor(s%60)<10?'0':''}${Math.floor(s%60)}`;
+                document.getElementById("miniCurrentTime").textContent = fmt(previewSec);
+                document.getElementById("fullCurrentTime").textContent = fmt(previewSec);
+              }
+
+              function onSeekCommit(val) {
+                const pct = parseFloat(val) || 0;
+                if (window.CosmosNative) {
+                  window.CosmosNative.seekToPercent(pct);
+                }
+                setTimeout(() => { isDraggingSeek = false; }, 150);
               }
 
               function updatePlayButtons(p) {
@@ -2046,19 +2018,12 @@ jobs:
                 document.getElementById("fullPlayBtn").innerHTML = icon;
               }
 
-              function prevTrack() { if(tracks.length) loadTrack((currentTrackIndex - 1 + tracks.length) % tracks.length, true); }
-              function nextTrack() {
-                if(!tracks.length) return;
-                if(repeatMode === 2) { audioEl.currentTime = 0; playAudio(); return; }
-                const nextIdx = shuffleMode ? Math.floor(Math.random() * tracks.length) : (currentTrackIndex + 1) % tracks.length;
-                loadTrack(nextIdx, true);
-              }
-
               function toggleShuffle() {
                 shuffleMode = !shuffleMode;
                 document.getElementById("shuffleBtn").className = shuffleMode
-                  ? "w-10 h-10 rounded-full flex items-center justify-center text-fuchsia-400"
-                  : "w-10 h-10 rounded-full flex items-center justify-center text-purple-400/50";
+                  ? "w-9 h-9 rounded-full flex items-center justify-center text-fuchsia-400"
+                  : "w-9 h-9 rounded-full flex items-center justify-center text-purple-400/50";
+                if (window.CosmosNative) window.CosmosNative.setShuffleAndRepeat(shuffleMode, repeatMode);
               }
 
               function cycleRepeat() {
@@ -2066,45 +2031,21 @@ jobs:
                 const btn = document.getElementById("repeatBtn");
                 const badge = document.getElementById("repeatOneBadge");
                 btn.className = repeatMode > 0
-                  ? "w-10 h-10 rounded-full flex items-center justify-center text-fuchsia-400 relative"
-                  : "w-10 h-10 rounded-full flex items-center justify-center text-purple-400/50 relative";
+                  ? "w-9 h-9 rounded-full flex items-center justify-center text-fuchsia-400 relative"
+                  : "w-9 h-9 rounded-full flex items-center justify-center text-purple-400/50 relative";
                 badge.classList.toggle("hidden", repeatMode !== 2);
+                if (window.CosmosNative) window.CosmosNative.setShuffleAndRepeat(shuffleMode, repeatMode);
               }
-
-              audioEl.addEventListener("play", () => initAudioEngine());
-              let lastTimeUpdateMs = 0;
-              audioEl.addEventListener("timeupdate", () => {
-                const now = performance.now();
-                if (now - lastTimeUpdateMs > 250) {
-                  lastTimeUpdateMs = now;
-                  updateTimeUI(audioEl.currentTime, audioEl.duration || 0);
-                }
-              });
-              audioEl.addEventListener("loadedmetadata", () => notifyNativeAndroidService());
-              audioEl.addEventListener("ended", nextTrack);
-
-              function seekAudio(val) {
-                if(audioEl.duration) {
-                  audioEl.currentTime = (val / 100) * audioEl.duration;
-                  notifyNativeAndroidService();
-                }
-              }
-
-              window.seekToMs = function(ms) {
-                audioEl.currentTime = ms / 1000;
-                notifyNativeAndroidService();
-              };
 
               function updateTimeUI(cur, tot) {
                 const fmt = s => `${Math.floor(s/60)}:${Math.floor(s%60)<10?'0':''}${Math.floor(s%60)}`;
-                document.getElementById("miniSeek").value = tot ? (cur/tot)*100 : 0;
-                if (isPlayerModalOpen) {
-                  document.getElementById("fullSeek").value = tot ? (cur/tot)*100 : 0;
-                  document.getElementById("fullCurrentTime").textContent = fmt(cur);
-                  document.getElementById("fullDuration").textContent = fmt(tot);
-                }
+                const pct = tot > 0 ? (cur / tot) * 100 : 0;
+                document.getElementById("miniSeek").value = pct;
+                document.getElementById("fullSeek").value = pct;
                 document.getElementById("miniCurrentTime").textContent = fmt(cur);
+                document.getElementById("fullCurrentTime").textContent = fmt(cur);
                 document.getElementById("miniDuration").textContent = fmt(tot);
+                document.getElementById("fullDuration").textContent = fmt(tot);
               }
 
               function setSleepTimer(mins) {
@@ -2132,8 +2073,13 @@ jobs:
                 renderLibrary();
               }
 
-              // Fila ligera a 120 FPS con miniaturas comprimidas y carga diferida
-              function createSongRowElement(track, idx, extraRightHtml = "") {
+              function syncQueueWithNative(trackArray) {
+                if (!window.CosmosNative || !trackArray || !trackArray.length) return;
+                const indices = trackArray.map(t => tracks.indexOf(t)).filter(i => i >= 0);
+                window.CosmosNative.setActiveQueue(JSON.stringify(indices));
+              }
+
+              function createSongRowElement(track, idx, currentListContext = null, extraRightHtml = "") {
                 const isCur = idx === currentTrackIndex;
                 const liked = isTrackLiked(track.id);
                 const div = document.createElement("div");
@@ -2157,7 +2103,12 @@ jobs:
 
                 const mainArea = document.createElement("div");
                 mainArea.className = "flex items-center gap-3 min-w-0 flex-1";
-                mainArea.onclick = () => { if (!longPressTriggered) loadTrack(idx, true); };
+                mainArea.onclick = () => {
+                  if (!longPressTriggered) {
+                    if (currentListContext) syncQueueWithNative(currentListContext);
+                    loadTrack(idx, true);
+                  }
+                };
                 mainArea.innerHTML = `
                   <img src="${track.thumb}" loading="lazy" decoding="async" onerror="this.onerror=null;this.src='ic_launcher.png';" class="w-12 h-12 cover-row object-cover shrink-0 bg-purple-950" />
                   <div class="min-w-0 flex-1">
@@ -2209,7 +2160,7 @@ jobs:
                 if(currentTab === "songs" || filterField) {
                   filtered.forEach(track => {
                     const idx = tracks.indexOf(track);
-                    frag.appendChild(createSongRowElement(track, idx));
+                    frag.appendChild(createSongRowElement(track, idx, filtered));
                   });
                 } else if(currentTab === "favorites") {
                   const favTracks = filtered.filter(t => isTrackLiked(t.id));
@@ -2219,7 +2170,7 @@ jobs:
                   }
                   favTracks.forEach(track => {
                     const idx = tracks.indexOf(track);
-                    frag.appendChild(createSongRowElement(track, idx));
+                    frag.appendChild(createSongRowElement(track, idx, favTracks));
                   });
                 } else if(currentTab === "playlists") {
                   if (activePlaylistViewId) {
@@ -2245,7 +2196,7 @@ jobs:
                       plTracks.forEach(track => {
                         const idx = tracks.indexOf(track);
                         const removeBtn = `<button onclick="removeTrackFromPlaylist('${pl.id}', '${track.id}', event)" class="w-8 h-8 rounded-full flex items-center justify-center text-red-400/80" title="Quitar"><i class="fa-solid fa-xmark text-xs"></i></button>`;
-                        frag.appendChild(createSongRowElement(track, idx, removeBtn));
+                        frag.appendChild(createSongRowElement(track, idx, plTracks, removeBtn));
                       });
                     }
                     container.appendChild(frag);
@@ -2323,7 +2274,16 @@ jobs:
                 const save = () => {
                   customOverrides[t.id] = { title: t.title, artist: t.artist, album: t.album, cover: t.cover };
                   localStorage.setItem("cosmos_overrides_2027", JSON.stringify(customOverrides));
-                  loadTrack(currentTrackIndex, isPlaying);
+                  if (window.CosmosNative) {
+                    window.CosmosNative.updateTrackMetadata(currentTrackIndex, t.title, t.artist, t.album);
+                  }
+                  document.getElementById("miniTitle").textContent = t.title;
+                  document.getElementById("miniArtist").textContent = t.artist;
+                  document.getElementById("fullTitle").textContent = t.title;
+                  document.getElementById("fullArtist").textContent = t.artist;
+                  document.getElementById("fullAlbumName").textContent = t.album;
+                  setImageWithFallback(document.getElementById("miniCover"), t.thumb);
+                  setImageWithFallback(document.getElementById("fullCover"), t.cover);
                   renderLibrary();
                   showToast("✨ Información actualizada");
                 };
@@ -2336,30 +2296,16 @@ jobs:
               }
 
               function openModal(id) {
-                if (id === "playerModal") {
-                  isPlayerModalOpen = true;
-                  updateTimeUI(audioEl.currentTime, audioEl.duration || 0);
-                }
                 document.getElementById(id).classList.remove("hidden");
                 document.getElementById(id).classList.add("flex");
               }
 
               function closeModal(id) {
-                if (id === "playerModal") isPlayerModalOpen = false;
                 document.getElementById(id).classList.add("hidden");
                 document.getElementById(id).classList.remove("flex");
               }
 
               window.addEventListener("DOMContentLoaded", () => {
-                const c = document.getElementById("chromaBars");
-                for(let i=0; i<12; i++) {
-                  const bar = document.createElement("div");
-                  bar.id = `chroma-bar-${i}`;
-                  bar.className = "bg-gradient-to-t from-purple-700 via-fuchsia-400 to-white h-full w-full rounded-t-sm chroma-bar-gpu";
-                  bar.style.transform = "scaleY(0.12)";
-                  c.appendChild(bar);
-                  chromaBarEls.push(bar);
-                }
                 renderEqButtons();
                 updateBentoCounters();
                 rescanPhoneLibrary();
@@ -2372,7 +2318,7 @@ jobs:
                     splash.style.opacity = "0";
                     setTimeout(() => splash.remove(), 500);
                   }
-                }, 1600);
+                }, 1500);
               });
             </script>
           </body>
