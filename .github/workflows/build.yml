@@ -33,7 +33,7 @@ jobs:
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
           echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
 
-      - name: Compilar COSMOS 7.0 Clean + Native Cover Picker + WA Filter
+      - name: Compilar COSMOS 7.1 Clean Header Edition
         run: |
           mkdir -p app/src/main/java/com/belmont/cosmos app/src/main/assets app/src/main/res/values app/src/main/res/drawable app/src/main/res/mipmap-xxhdpi
 
@@ -132,8 +132,8 @@ jobs:
               applicationId "com.belmont.cosmos"
               minSdk 26
               targetSdk 34
-              versionCode 8
-              versionName "7.0-CLEAN"
+              versionCode 9
+              versionName "7.1-CLEAN"
             }
             compileOptions {
               sourceCompatibility JavaVersion.VERSION_17
@@ -295,7 +295,6 @@ jobs:
             private val uiHandler = Handler(Looper.getMainLooper())
             private var isUiVisible = true
 
-            // Selector nativo de galeria para cambiar portadas sin depender del input web
             private val pickCoverLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
               if (uri != null && pendingCoverTrackIndex in trackList.indices) {
                 saveCustomCoverFromUri(pendingCoverTrackIndex, uri)
@@ -730,7 +729,6 @@ jobs:
               scanDeviceMusic()
             }
 
-            // Escaneo filtrado: solo .mp3, .wav y .m4a para musica; audios de WhatsApp aislados en seccion aparte
             private fun scanDeviceMusic() {
               Thread {
                 val arr = JSONArray()
@@ -770,7 +768,6 @@ jobs:
                     val isWa = fullLower.contains("whatsapp") || nameLower.startsWith("ptt-") || (nameLower.startsWith("aud-") && nameLower.contains("-wa"))
                     val ext = nameLower.substringAfterLast('.', dataPath.lowercase().substringAfterLast('.', ""))
 
-                    // Si no es WhatsApp, exige estrictamente mp3, wav o m4a (y descarta grabadoras de llamadas/voz)
                     if (!isWa) {
                       if (ext != "mp3" && ext != "wav" && ext != "m4a") continue
                       if (fullLower.contains("sound_recorder") || fullLower.contains("callrecord") || fullLower.contains("voice recorder")) continue
@@ -963,6 +960,7 @@ jobs:
               .cover-2027 { border-radius: 28px; border: 1px solid rgba(255,255,255,0.20); box-shadow: 0 22px 50px rgba(0,0,0,0.85), 0 0 36px rgba(192,38,211,0.34); transition: transform 0.38s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.38s ease; }
               .cover-playing { transform: scale(1.04); box-shadow: 0 26px 60px rgba(0,0,0,0.92), 0 0 50px rgba(232,121,249,0.55); }
               .cover-row { border-radius: 14px; border: 1px solid rgba(232,121,249,0.22); }
+              .title-clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
               @keyframes letterGlow { 0% { opacity: 0.1; transform: translateY(6px); } 50% { opacity: 1; color: #fff; text-shadow: 0 0 18px #e879f9; transform: translateY(0); } 100% { opacity: 1; color: #f3e8ff; text-shadow: 0 0 10px #d946ef; transform: translateY(0); } }
               @keyframes floatAmbient { 0%, 100% { transform: scale(1); opacity: 0.52; } 50% { transform: scale(1.12); opacity: 0.85; } }
               @keyframes eqPulse { 0%, 100% { transform: scaleY(0.3); } 50% { transform: scaleY(1); } }
@@ -1071,34 +1069,33 @@ jobs:
             </div>
 
             <div id="playerModal" class="fixed inset-0 z-50 cosmos-bg hidden flex-col justify-between p-5 sm:p-7 overflow-y-auto">
-              <div class="flex items-center justify-between relative z-10">
-                <button onclick="closeModal('playerModal')" class="w-10 h-10 rounded-full glass-pill text-purple-100 flex items-center justify-center active:scale-90"><i class="fa-solid fa-chevron-down text-sm"></i></button>
-                <div class="text-center">
-                  <span class="digital-cosmos text-[10px] uppercase text-fuchsia-300 block">COSMOS</span>
-                  <span id="fullAlbumName" class="text-xs font-semibold text-purple-200/90 truncate max-w-[220px] block">Álbum</span>
+              <div class="space-y-3 relative z-10">
+                <div class="flex items-center justify-between">
+                  <button onclick="closeModal('playerModal')" class="w-10 h-10 rounded-full glass-pill text-purple-100 flex items-center justify-center active:scale-90"><i class="fa-solid fa-chevron-down text-sm"></i></button>
+                  <span class="digital-cosmos text-[10px] uppercase text-fuchsia-300">COSMOS</span>
+                  <button onclick="openActionSheet(currentTrackIndex)" class="w-10 h-10 rounded-full glass-pill text-purple-100 flex items-center justify-center active:scale-90"><i class="fa-solid fa-ellipsis-vertical text-sm"></i></button>
                 </div>
-                <button onclick="openActionSheet(currentTrackIndex)" class="w-10 h-10 rounded-full glass-pill text-purple-100 flex items-center justify-center active:scale-90"><i class="fa-solid fa-ellipsis-vertical text-sm"></i></button>
+                <div class="text-center px-2">
+                  <h2 id="fullTitle" class="text-xl sm:text-2xl font-extrabold text-white leading-snug title-clamp">Sin canción</h2>
+                  <p class="text-xs sm:text-sm text-fuchsia-200/85 truncate mt-1">
+                    <span id="fullArtist">--</span> <span class="text-purple-400/60 mx-1">•</span> <span id="fullAlbumName" class="text-purple-200/80">Álbum</span>
+                  </p>
+                </div>
               </div>
 
-              <div class="flex-1 flex flex-col items-center justify-center my-6 relative">
+              <div class="flex-1 flex flex-col items-center justify-center my-4 relative">
                 <div class="relative flex items-center justify-center">
-                  <img id="ambientCoverBlur" src="ic_launcher.png" class="absolute w-76 h-76 w-[300px] h-[300px] rounded-full object-cover blur-3xl opacity-60 ambient-halo pointer-events-none" />
-                  <img id="fullCover" src="ic_launcher.png" oncontextmenu="openActionSheet(currentTrackIndex); return false;" class="relative z-10 w-[290px] h-[290px] sm:w-80 sm:h-80 cover-2027 object-cover bg-[#090314]" />
+                  <img id="ambientCoverBlur" src="ic_launcher.png" class="absolute w-[280px] h-[280px] rounded-full object-cover blur-3xl opacity-60 ambient-halo pointer-events-none" />
+                  <img id="fullCover" src="ic_launcher.png" oncontextmenu="openActionSheet(currentTrackIndex); return false;" class="relative z-10 w-[275px] h-[275px] sm:w-80 sm:h-80 cover-2027 object-cover bg-[#090314]" />
                 </div>
               </div>
 
               <div class="space-y-4 pt-1 relative z-10">
-                <div class="flex items-center justify-between gap-2">
-                  <div class="min-w-0 flex-1">
-                    <h2 id="fullTitle" class="text-xl sm:text-2xl font-extrabold text-white truncate">Sin canción</h2>
-                    <p id="fullArtist" class="text-sm text-fuchsia-200/85 truncate mt-0.5">--</p>
-                  </div>
-                  <div class="flex items-center gap-1.5 shrink-0">
-                    <button onclick="toggleLikeCurrent()" id="fullLikeBtn" class="w-10 h-10 rounded-full glass-pill flex items-center justify-center text-purple-200 active:scale-90"><i class="fa-regular fa-heart text-base"></i></button>
-                    <button onclick="openAddToPlaylistModal(currentTrackIndex)" class="w-10 h-10 rounded-full glass-pill flex items-center justify-center text-purple-200 active:scale-90"><i class="fa-solid fa-folder-plus text-sm text-fuchsia-300"></i></button>
-                    <button onclick="shareTrack(currentTrackIndex)" class="w-10 h-10 rounded-full glass-pill flex items-center justify-center text-purple-200 active:scale-90"><i class="fa-solid fa-share-nodes text-sm text-fuchsia-300"></i></button>
-                    <button onclick="openModal('eqModal')" id="fullGenreBadge" class="px-3.5 py-2 rounded-full text-[10px] glass-pill text-fuchsia-200 font-mono font-bold">EQ: Space Rock</button>
-                  </div>
+                <div class="flex items-center justify-center gap-2.5">
+                  <button onclick="toggleLikeCurrent()" id="fullLikeBtn" class="w-10 h-10 rounded-full glass-pill flex items-center justify-center text-purple-200 active:scale-90"><i class="fa-regular fa-heart text-base"></i></button>
+                  <button onclick="openAddToPlaylistModal(currentTrackIndex)" class="w-10 h-10 rounded-full glass-pill flex items-center justify-center text-purple-200 active:scale-90"><i class="fa-solid fa-folder-plus text-sm text-fuchsia-300"></i></button>
+                  <button onclick="shareTrack(currentTrackIndex)" class="w-10 h-10 rounded-full glass-pill flex items-center justify-center text-purple-200 active:scale-90"><i class="fa-solid fa-share-nodes text-sm text-fuchsia-300"></i></button>
+                  <button onclick="openModal('eqModal')" id="fullGenreBadge" class="px-4 py-2 rounded-full text-xs glass-pill text-fuchsia-200 font-mono font-bold">EQ: Space Rock</button>
                 </div>
 
                 <div>
